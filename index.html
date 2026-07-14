@@ -582,6 +582,39 @@ var DB = {
   }
 };
 
+/* ---- Roster export (shared by the Employees page and Settings) ---- */
+function exportRosterCSV(rows){
+  var cols=["employeeId","fullName","role","division","team","branch","email","phone","nmls","dre","employmentType","status","hireDate","volume2026","units2026","mortgageCoach"];
+  var lines=[cols.join(",")];
+  (rows||[]).forEach(function(e){
+    var r=[e.employeeId,e.fullName,e.role,e.division,e.team,e.branch,e.email,e.phone,e.nmls,e.dre,e.employmentType,e.status,e.hireDate,e.production.volume2026,e.production.units2026,(e.toolAccess&&e.toolAccess.mortgageCoach)?"Y":""];
+    lines.push(r.map(function(v){v=(v==null?"":String(v)); return /[",\n]/.test(v)?'"'+v.replace(/"/g,'""')+'"':v;}).join(","));
+  });
+  var blob=new Blob([lines.join("\n")],{type:"text/csv"});
+  var a=document.createElement("a"); a.href=URL.createObjectURL(blob);
+  a.download="partners-roster-"+new Date().toISOString().slice(0,10)+".csv"; a.click();
+}
+function exportRosterXLSX(list){
+  if(typeof XLSX==="undefined"){ alert("Excel library didn't load (need an internet connection the first time). Use Export CSV instead — it opens in Excel too."); return; }
+  // Mirrors the columns of the original uploaded "Employee Roster" workbook tab.
+  var headers=["EMPLOYEE","POSITION","Division","TEAM","P/P","PROCESSOR","HIRED","EMAIL","NMLS#","DRE#","W2/1099","Graduated","Equipment","STATE"];
+  var aoa=[headers];
+  var sorted=(list||[]).slice().sort(function(a,b){ return (a.lastName+a.firstName).localeCompare(b.lastName+b.firstName); });
+  sorted.forEach(function(e){
+    aoa.push([
+      e.fullName||"", e.role||"", e.division||"", e.team||"", e.productionPartner||"",
+      e.processor||"", e.hireDate||"", e.email||"", e.nmls||"", e.dre||"",
+      e.employmentType||"", (e.onboarding&&e.onboarding.complete)?"\u2713":"",
+      e.equipmentStatus||"", (e.stateLicenses||[]).join(", ")
+    ]);
+  });
+  var ws=XLSX.utils.aoa_to_sheet(aoa);
+  ws["!cols"]=[{wch:22},{wch:24},{wch:9},{wch:12},{wch:16},{wch:14},{wch:11},{wch:30},{wch:11},{wch:14},{wch:9},{wch:10},{wch:12},{wch:16}];
+  var wb=XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb,ws,"Employee Roster");
+  XLSX.writeFile(wb,"partners-roster-"+new Date().toISOString().slice(0,10)+".xlsx");
+}
+
 /* ============================================================================
    HELPERS
    ============================================================================ */
@@ -650,6 +683,7 @@ function PinGate(p){
       h("div",{className:"gate-tag"},"You matter."),
       h("div",{className:"sub"},"Internal employee database — enter your access PIN"),
       h("input",{className:"pin-in"+(err?" err":""),type:"password",inputMode:"numeric",
+        name:"pm-access-pin",autoComplete:"new-password",autoCorrect:"off",autoCapitalize:"off",spellCheck:false,
         value:val,autoFocus:true,maxLength:8,placeholder:"••••",
         onChange:function(e){setVal(e.target.value);},
         onKeyDown:function(e){ if(e.key==="Enter") submit(); }}),
@@ -985,39 +1019,8 @@ function GridView(p){
   }
   var activeFilterCount = Object.keys(f).filter(function(k){return f[k];}).length;
 
-  function exportCsv(){
-    var cols=["employeeId","fullName","role","division","team","branch","email","phone","nmls","dre","employmentType","status","hireDate","volume2026","units2026","mortgageCoach"];
-    var lines=[cols.join(",")];
-    rows.forEach(function(e){
-      var r=[e.employeeId,e.fullName,e.role,e.division,e.team,e.branch,e.email,e.phone,e.nmls,e.dre,e.employmentType,e.status,e.hireDate,e.production.volume2026,e.production.units2026,(e.toolAccess&&e.toolAccess.mortgageCoach)?"Y":""];
-      lines.push(r.map(function(v){v=(v==null?"":String(v)); return /[",\n]/.test(v)?'"'+v.replace(/"/g,'""')+'"':v;}).join(","));
-    });
-    var blob=new Blob([lines.join("\n")],{type:"text/csv"});
-    var a=document.createElement("a"); a.href=URL.createObjectURL(blob);
-    a.download="partners-roster-"+new Date().toISOString().slice(0,10)+".csv"; a.click();
-  }
-
-  function exportXlsx(){
-    if(typeof XLSX==="undefined"){ alert("Excel library didn't load (need an internet connection the first time). Use Export CSV instead — it opens in Excel too."); return; }
-    // Mirrors the columns of the original uploaded "Employee Roster" workbook tab.
-    var headers=["EMPLOYEE","POSITION","Division","TEAM","P/P","PROCESSOR","HIRED","EMAIL","NMLS#","DRE#","W2/1099","Graduated","Equipment","STATE"];
-    var aoa=[headers];
-    // export every record currently in the roster (a full mirror), stable by name
-    var list=p.emps.slice().sort(function(a,b){ return (a.lastName+a.firstName).localeCompare(b.lastName+b.firstName); });
-    list.forEach(function(e){
-      aoa.push([
-        e.fullName||"", e.role||"", e.division||"", e.team||"", e.productionPartner||"",
-        e.processor||"", e.hireDate||"", e.email||"", e.nmls||"", e.dre||"",
-        e.employmentType||"", (e.onboarding&&e.onboarding.complete)?"\u2713":"",
-        e.equipmentStatus||"", (e.stateLicenses||[]).join(", ")
-      ]);
-    });
-    var ws=XLSX.utils.aoa_to_sheet(aoa);
-    ws["!cols"]=[{wch:22},{wch:24},{wch:9},{wch:12},{wch:16},{wch:14},{wch:11},{wch:30},{wch:11},{wch:14},{wch:9},{wch:10},{wch:12},{wch:16}];
-    var wb=XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb,ws,"Employee Roster");
-    XLSX.writeFile(wb,"partners-roster-"+new Date().toISOString().slice(0,10)+".xlsx");
-  }
+  function exportCsv(){ exportRosterCSV(rows); }
+  function exportXlsx(){ exportRosterXLSX(p.emps); }
 
   return h("div",{className:"page"},
     h("div",{className:"page-head"},
@@ -1427,6 +1430,14 @@ function Settings(p){
         h("p",{style:{fontSize:13.5,color:"var(--mid)",marginTop:12}},
         "Connected. Full records live at ",h("code",null,"/employees"),"; the Hype Board reads ",h("code",null,"/roster"),". This roster is the single place to add people."),
       h("div",{style:{marginTop:14}}, h("button",{className:"btn btn-ghost",onClick:resetLocal},"Reset local fallback data"))
+    ),
+
+    h("div",{className:"set-card"},
+      h("h3",null,"Export roster"),
+      h("div",{className:"desc"},"Download the full roster. Excel mirrors your original workbook's column layout; CSV is a lighter data dump."),
+      h("div",{style:{display:"flex",gap:10,flexWrap:"wrap"}},
+        h("button",{className:"btn btn-primary",onClick:function(){exportRosterXLSX(p.emps);}},h(Icon,{n:"dl",s:16}),"Export Excel (.xlsx)"),
+        h("button",{className:"btn btn-ghost",onClick:function(){exportRosterCSV(p.emps);}},h(Icon,{n:"dl",s:16}),"Export CSV"))
     ),
 
     h("div",{className:"set-card"},
