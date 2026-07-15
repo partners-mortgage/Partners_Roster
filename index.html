@@ -560,19 +560,12 @@ var DB = {
     return this.save(e);
   },
 
-  // Photo: firebase -> Storage; local -> data URL kept on the record.
+  // Photo: always a downscaled base64 image stored inline on the record.
+  // (Firebase Storage caused blocking hangs project-wide, so every tool uses
+  //  base64 in the database instead. Downscaling keeps records small.)
   async uploadPhoto(emp, file){
-    if (this.mode === "firebase" && fstore){
-      var path = "employee-photos/"+emp.employeeId+"/"+Date.now()+"_"+file.name;
-      var ref = fstore.ref().child(path);
-      await ref.put(file);
-      var url = await ref.getDownloadURL();
-      return { photoUrl:url, photoStoragePath:path, photoUpdatedAt:new Date().toISOString() };
-    }
-    var dataUrl = await new Promise(function(res,rej){
-      var r = new FileReader(); r.onload=function(){res(r.result);}; r.onerror=rej; r.readAsDataURL(file);
-    });
-    return { photoUrl:dataUrl, photoStoragePath:"local:"+file.name, photoUpdatedAt:new Date().toISOString() };
+    var dataUrl = await scaleImageToDataURL(file, 512, 0.82);
+    return { photoUrl:dataUrl, photoStoragePath:"inline", photoUpdatedAt:new Date().toISOString() };
   },
 
   nextId(all){
@@ -581,6 +574,38 @@ var DB = {
     return "PM-" + String(max+1).padStart(4,"0");
   }
 };
+
+/* Downscale an image file to a small JPEG data URL (keeps DB records light and
+   avoids the Firebase Storage hang). Falls back to the raw file if canvas fails. */
+function scaleImageToDataURL(file, maxDim, quality){
+  return new Promise(function(resolve){
+    try{
+      var url=URL.createObjectURL(file);
+      var img=new Image();
+      img.onload=function(){
+        try{
+          var w=img.naturalWidth||img.width, h=img.naturalHeight||img.height;
+          var scale=Math.min(1, maxDim/Math.max(w,h));
+          var cw=Math.round(w*scale), ch=Math.round(h*scale);
+          var c=document.createElement("canvas"); c.width=cw; c.height=ch;
+          var ctx=c.getContext("2d"); ctx.drawImage(img,0,0,cw,ch);
+          URL.revokeObjectURL(url);
+          resolve(c.toDataURL("image/jpeg", quality||0.82));
+        }catch(e){
+          URL.revokeObjectURL(url);
+          var r=new FileReader(); r.onload=function(){resolve(r.result);}; r.readAsDataURL(file);
+        }
+      };
+      img.onerror=function(){
+        URL.revokeObjectURL(url);
+        var r=new FileReader(); r.onload=function(){resolve(r.result);}; r.readAsDataURL(file);
+      };
+      img.src=url;
+    }catch(e){
+      var r=new FileReader(); r.onload=function(){resolve(r.result);}; r.readAsDataURL(file);
+    }
+  });
+}
 
 /* ---- Roster export (shared by the Employees page and Settings) ---- */
 function exportRosterCSV(rows){
@@ -1275,7 +1300,7 @@ function EmployeeForm(p){
           h("div",null,
             h("div",{style:{fontWeight:600,marginBottom:4}},"Headshot"),
             h("div",{style:{color:"var(--muted)",fontSize:12.5,marginBottom:9}},
-              DB.mode==="firebase"?"High-res image → Firebase Storage":"Stored with the record (local mode)"),
+              DB.mode==="firebase"?"Saved with the record":"Stored with the record (local mode)"),
             h("input",{ref:fileRef,type:"file",accept:"image/*",style:{display:"none"},onChange:onPhoto}),
             h("button",{className:"btn btn-ghost",disabled:busy,onClick:function(){fileRef.current.click();}},
               busy?"Uploading…":(f.photoUrl?"Replace photo":"Upload photo")))),
