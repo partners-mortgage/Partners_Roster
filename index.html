@@ -474,25 +474,39 @@ async function pushAllToHype(list){
 }
 
 // One-time sync: the LIVE database already has data, so editing SEED_DATA alone
-// won't reach it. This upserts exactly the records changed on 2026-07-20
-// (6 new hires + 4 name/comp corrections), once, guarded by a flag in the DB.
-// It never deletes employee records and only touches this explicit list.
-var PATCH_V = "patch_2026_07_20";
-var PATCH_IDS = ["PM-0098","PM-0099","PM-0100","PM-0101","PM-0102","PM-0103","PM-0007","PM-0054","PM-0013","PM-0047"];
+// won't reach it. This pushes the 2026-07-20 changes into the live records once,
+// guarded by a flag. It uses a field-level merge (never a full overwrite of
+// existing people), so photos and other live edits are preserved. New hires are
+// written whole; everyone else only gets their comp fields (and the 4 name/legal
+// corrections) updated.
+var PATCH_V = "patch_2026_07_20_comp";
 async function applySeedPatches(){
   if(DB.mode!=="firebase" || !frt) return false;
   try{
     var snap = await frt.ref("rosterMeta/"+PATCH_V).once("value");
     if(snap.val()) return false;           // already applied
-    for(var i=0;i<PATCH_IDS.length;i++){
-      var rec = SEED_DATA.filter(function(e){return e.employeeId===PATCH_IDS[i];})[0];
-      if(!rec) continue;
-      try{
-        await frt.ref(CONFIG.EMPLOYEES_PATH+"/"+rec.employeeId).set(rec);
-        await mirrorToHypeBoard(rec);
-      }catch(e){ console.warn("Patch record failed", PATCH_IDS[i], e.message); }
+    var newIds = {"PM-0098":1,"PM-0099":1,"PM-0100":1,"PM-0101":1,"PM-0102":1,"PM-0103":1};
+    var newRecs = [];
+    var updates = {};
+    for(var i=0;i<SEED_DATA.length;i++){
+      var rec = SEED_DATA[i];
+      if(newIds[rec.employeeId]){ updates[rec.employeeId] = rec; newRecs.push(rec); continue; }
+      // existing person: only merge comp fields, leave everything else untouched
+      if(rec.comp || rec.compPlan){
+        updates[rec.employeeId+"/compPlan"] = rec.compPlan || "";
+        if(rec.comp) updates[rec.employeeId+"/comp"] = rec.comp;
+      }
     }
-    // clear the two old misspelled Hype Board entries so they don't duplicate
+    // name spelling corrections
+    updates["PM-0007/firstName"]="Maksim"; updates["PM-0007/lastName"]="Kapustsin"; updates["PM-0007/fullName"]="Maksim Kapustsin"; updates["PM-0007/slug"]="maksim-kapustsin";
+    updates["PM-0054/firstName"]="Robert"; updates["PM-0054/lastName"]="Martiniello"; updates["PM-0054/fullName"]="Robert Martiniello"; updates["PM-0054/slug"]="robert-martiniello";
+    // legal names
+    updates["PM-0013/legalName"]="Bentura Mendoza";
+    updates["PM-0047/legalName"]="James Setka";
+    try{ await frt.ref(CONFIG.EMPLOYEES_PATH).update(updates); }
+    catch(e){ console.warn("Comp sync write failed:", e.message); return false; }
+    // put the new hires (and corrected names) onto the Hype Board; clear old misspellings
+    for(var j=0;j<newRecs.length;j++){ try{ await mirrorToHypeBoard(newRecs[j]); }catch(e){} }
     try{ await frt.ref(CONFIG.ROSTER_PATH+"/"+hypeKey("Maksim Kapustin")).remove(); }catch(e){}
     try{ await frt.ref(CONFIG.ROSTER_PATH+"/"+hypeKey("Robert Martinello")).remove(); }catch(e){}
     await frt.ref("rosterMeta/"+PATCH_V).set(true);
