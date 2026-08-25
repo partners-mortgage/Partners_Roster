@@ -514,6 +514,49 @@ async function applySeedPatches(){
   }catch(e){ console.warn("Seed patch skipped:", e.message); return false; }
 }
 
+/* ---------------- Backup & restore (guards against data loss) ----------------
+   Auto-backups are written to Firebase on load whenever the roster looks healthy.
+   Photos are stripped from backups to keep them small — they re-pull from the
+   Hype Board automatically after a restore. */
+function stripForBackup(e){ var c=Object.assign({},e); c.photoUrl=""; return c; }
+async function snapshotEmployees(list, reason){
+  if(!frt || !list || list.length < 20) return false;   // never snapshot an empty/suspicious state
+  try{
+    var ts = String(Date.now());
+    var empObj = {};
+    list.forEach(function(e){ if(e && e.employeeId) empObj[e.employeeId] = stripForBackup(e); });
+    await frt.ref("rosterBackups/"+ts).set({ at:new Date().toISOString(), reason:reason||"auto", count:list.length, employees:empObj });
+    var snap = await frt.ref("rosterBackups").once("value");
+    var keys = Object.keys(snap.val()||{}).sort();       // timestamp keys sort oldest→newest
+    while(keys.length > 12){ var k = keys.shift(); try{ await frt.ref("rosterBackups/"+k).remove(); }catch(e){} }
+    return true;
+  }catch(e){ console.warn("Backup skipped:", e.message); return false; }
+}
+async function getBackupList(){
+  if(!frt) return [];
+  try{
+    var snap = await frt.ref("rosterBackups").once("value");
+    var all = snap.val()||{};
+    return Object.keys(all).sort().reverse().map(function(k){ return {ts:k, at:all[k].at, reason:all[k].reason, count:all[k].count||0}; });
+  }catch(e){ return []; }
+}
+async function restoreFromBackup(ts){
+  if(!frt) throw new Error("Not connected");
+  var snap = await frt.ref("rosterBackups/"+ts).once("value");
+  var b = snap.val();
+  if(!b || !b.employees) throw new Error("Backup not found");
+  await frt.ref(CONFIG.EMPLOYEES_PATH).set(b.employees);   // full replace with the snapshot
+  return Object.keys(b.employees).length;
+}
+async function restoreFromSeed(){
+  if(!frt) throw new Error("Not connected");
+  var obj = {};
+  SEED_DATA.forEach(function(e){ obj[e.employeeId] = e; });
+  await frt.ref(CONFIG.EMPLOYEES_PATH).set(obj);          // full replace with the built-in roster
+  try{ pushAllToHype(SEED_DATA.slice()); }catch(e){}
+  return SEED_DATA.length;
+}
+
 var LS_KEY = "pm_roster_v1";
 var LS_PIN = "pm_roster_pin";
 var LS_SETTINGS = "pm_roster_settings";
@@ -599,6 +642,16 @@ var DB = {
     e.status = status;
     if(status==="inactive" && !e.offboardingDate) e.offboardingDate = new Date().toISOString().slice(0,10);
     return this.save(e);
+  },
+
+  async remove(emp){
+    if (this.mode === "firebase"){
+      await frt.ref(CONFIG.EMPLOYEES_PATH+"/"+emp.employeeId).remove();
+      try{ await frt.ref(CONFIG.ROSTER_PATH+"/"+hypeKey(emp.fullName)).remove(); }catch(e){}
+      return;
+    }
+    var all = await this.list();
+    lsSet(LS_KEY, JSON.stringify(all.filter(function(x){ return x.employeeId!==emp.employeeId; })));
   },
 
   // Photo: always a downscaled base64 image stored inline on the record.
@@ -776,6 +829,7 @@ function RosterApp(){
       setEmps(list);
       autoMergePhotos(list);   // background: bring down Hype Board photos so they just appear
       applySeedPatches().then(function(changed){ if(changed) refresh(); }); // one-time: sync new hires + corrections to the live DB
+      snapshotEmployees(list, "auto on load");   // automatic safety backup (only when data looks healthy)
     }).catch(function(e){ console.error("Roster load failed; using seed data.", e); setEmps(SEED_DATA.slice()); });
   },[]);
   function flash(msg,kind){ setToast({msg:msg,kind:kind||"ok"}); setTimeout(function(){setToast(null);},2600); }
@@ -818,6 +872,34 @@ function RosterApp(){
     await refresh();
     setSel(Object.assign({},emp,{status:ns}));
     flash(emp.fullName+" marked "+ns);
+  }
+  async function deleteEmp(emp){
+    try{
+      await snapshotEmployees(emps||[], "before deleting "+emp.employeeId);  // safety net first
+      await DB.remove(emp);
+      await refresh();
+      setSel(null);
+      flash(emp.fullName+" deleted");
+    }catch(e){ console.error(e); flash("Delete failed: "+e.message,"err"); }
+  }
+  async function restoreSeed(){
+    try{
+      flash("Restoring full roster…");
+      await snapshotEmployees(emps||[], "before app-data restore");
+      var n = await restoreFromSeed();
+      await refresh();
+      flash("Restored "+n+" people from app data");
+    }catch(e){ console.error(e); flash("Restore failed: "+e.message,"err"); }
+  }
+  async function restoreBackupLatest(){
+    try{
+      var list = await getBackupList();
+      if(!list.length){ flash("No backups found yet","err"); return; }
+      flash("Restoring from backup…");
+      var n = await restoreFromBackup(list[0].ts);
+      await refresh();
+      flash("Restored "+n+" people from backup ("+new Date(+list[0].ts).toLocaleString()+")");
+    }catch(e){ console.error(e); flash("Restore failed: "+e.message,"err"); }
   }
   function requireAdmin(fn){
     if(admin) return fn();
@@ -879,11 +961,19 @@ function RosterApp(){
       view==="grid" && h(GridView,{emps:emps,q:q,filters:gridFilters,setFilters:setGridFilters,
         open:function(e){setSel(e);},onNew:newEmp,admin:admin}),
       view==="celebrations" && h(Celebrations,{emps:emps,open:function(e){setSel(e);}}),
-      view==="settings" && h(Settings,{emps:emps,flash:flash,refresh:refresh,onPullPhotos:syncPhotos,onPushAll:pushAll})
+      view==="settings" && h(Settings,{emps:emps,flash:flash,refresh:refresh,onPullPhotos:syncPhotos,onPushAll:pushAll,
+        onRestoreSeed:restoreSeed,onRestoreBackup:restoreBackupLatest,getBackups:getBackupList})
     ),
     sel ? h(ProfileDrawer,{emp:sel,onClose:function(){setSel(null);},
       onEdit:function(){ requireAdmin(function(){ setEdit(sel); }); },
-      onToggle:function(){ requireAdmin(function(){ toggleStatus(sel); }); }, admin:admin}) : null,
+      onToggle:function(){ requireAdmin(function(){ toggleStatus(sel); }); },
+      onDelete:function(){ requireAdmin(function(){
+        var nm = prompt("This permanently deletes ONLY this one record.\n\nTo confirm, type the person's full name exactly:\n\n"+sel.fullName);
+        if(nm===null) return;
+        if(nm.trim()!==sel.fullName){ flash("Name didn't match — nothing was deleted","err"); return; }
+        deleteEmp(sel);
+      }); },
+      admin:admin}) : null,
     edit ? h(EmployeeForm,{emp:edit,all:emps,onClose:function(){setEdit(null);},onSave:saveEmp,flash:flash}) : null,
     toast ? h("div",{className:"toast "+toast.kind}, h("span",{className:"d"},toast.kind==="err"?"✕":"✓"), toast.msg) : null
   );
@@ -1256,10 +1346,12 @@ function ProfileDrawer(p){
         tabs.map(function(t){ return h("div",{key:t[0],className:"dr-tab"+(tab===t[0]?" active":""),
           onClick:function(){setTab(t[0]);}}, t[1]); })),
       h("div",{className:"dr-body"}, body),
-      h("div",{className:"dr-actions"},
-        h("button",{className:"btn "+(e.status==="active"?"btn-danger":"btn-ghost"),onClick:p.onToggle},
-          e.status==="active"?"Mark inactive":"Reactivate"),
-        h("button",{className:"btn btn-primary",onClick:p.onEdit},"Edit record"))
+      h("div",{className:"dr-actions",style:{justifyContent:"space-between"}},
+        h("div",null, p.admin ? h("button",{className:"btn btn-ghost",style:{color:"#b93b3b",borderColor:"#f0cccc"},onClick:p.onDelete},"Delete") : null),
+        h("div",{style:{display:"flex",gap:10}},
+          h("button",{className:"btn "+(e.status==="active"?"btn-danger":"btn-ghost"),onClick:p.onToggle},
+            e.status==="active"?"Mark inactive":"Reactivate"),
+          h("button",{className:"btn btn-primary",onClick:p.onEdit},"Edit record")))
     )
   );
 }
@@ -1327,6 +1419,14 @@ function EmployeeForm(p){
     n.slug=n.fullName.toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-|-$/g,"");
     if(typeof n.stateLicenses==="string") n.stateLicenses=n.stateLicenses.split(",").map(function(s){return s.trim();}).filter(Boolean);
     if(typeof n.branchLicenses==="string") n.branchLicenses=n.branchLicenses.split(",").map(function(s){return s.trim();}).filter(Boolean);
+    // keep the readable comp summary in sync with the structured LP/BP/Rev fields
+    if(n.comp && (String(n.comp.lp||"")||String(n.comp.bp||"")||String(n.comp.rev||""))){
+      var cp=[];
+      if(String(n.comp.lp||"")!=="") cp.push("LP "+n.comp.lp);
+      if(String(n.comp.bp||"")!=="") cp.push("BP "+n.comp.bp);
+      if(String(n.comp.rev||"")!=="") cp.push("Rev "+n.comp.rev);
+      n.compPlan=cp.join(" \u00b7 ");
+    }
     if(isNew) n.createdAt=new Date().toISOString();
     setBusy(true); await p.onSave(n); setBusy(false);
   }
@@ -1386,7 +1486,14 @@ function EmployeeForm(p){
             h("input",{className:"f-in",value:branchLicStr,onChange:function(e){set("branchLicenses",e.target.value);}}))),
 
         h("div",{className:"sec-title"},"Compensation"),
-        h("div",{className:"form-grid"}, In("Compensation plan","compPlan"), In("Bonus plan","bonusPlan")),
+        h("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:"12px"}},
+          In("LO Comp — LP (bps)","comp.lp","text","e.g. 160"),
+          In("LO Comp — BP","comp.bp","text","e.g. 0.6"),
+          In("LO Comp — Rev","comp.rev","text","e.g. 0.6")),
+        h("div",{style:{fontSize:"12px",color:"#7A8A96",margin:"6px 0 10px"}},"Summary auto-fills from LP / BP / Rev — e.g. \u201cLP 160 \u00b7 BP 0.6 \u00b7 Rev 0.6\u201d."),
+        h("div",{className:"form-grid"},
+          Sel("Originating","comp.originating",["","Originator","Non-Originator","Originator/Processor"]),
+          In("Bonus plan","bonusPlan")),
 
         h("div",{className:"sec-title"},"Production"),
         h("div",{className:"form-grid"}, In("2025 units","production.units2025","number"), In("2025 volume","production.volume2025","number")),
@@ -1474,14 +1581,42 @@ function Settings(p){
     }
   }
   var _busy=useState(false),busy=_busy[0],setBusy=_busy[1];
+  var _bk=useState(null),backups=_bk[0],setBackups=_bk[1];
+  useEffect(function(){ if(p.getBackups){ Promise.resolve(p.getBackups()).then(setBackups).catch(function(){setBackups([]);}); } },[]);
   function pull(overwrite){
     setBusy(true);
     Promise.resolve(p.onPullPhotos({overwrite:overwrite})).then(function(){setBusy(false);}).catch(function(){setBusy(false);});
+  }
+  var latest = backups && backups.length ? backups[0] : null;
+  function doRestoreSeed(){
+    var t = prompt("This REPLACES the entire live roster with the built-in app data (all "+ (SEED_DATA?SEED_DATA.length:"") +" people, with comp plans). Current records are backed up first.\n\nType  RESTORE  to confirm:");
+    if(t===null) return;
+    if(t.trim().toUpperCase()!=="RESTORE"){ p.flash("Didn't type RESTORE — nothing changed","err"); return; }
+    setBusy(true); Promise.resolve(p.onRestoreSeed()).then(function(){setBusy(false);}).catch(function(){setBusy(false);});
+  }
+  function doRestoreBackup(){
+    if(!latest){ p.flash("No backups yet","err"); return; }
+    if(confirm("Restore the roster to the backup from "+new Date(+latest.ts).toLocaleString()+" ("+latest.count+" people)?\n\nThis replaces the current live records.")){
+      setBusy(true); Promise.resolve(p.onRestoreBackup()).then(function(){setBusy(false);}).catch(function(){setBusy(false);});
+    }
   }
   return h("div",{className:"page"},
     h("div",{className:"page-head"},h("div",null,
       h("div",{className:"eyebrow"},"Admin"),h("h1",null,"Settings"),
       h("div",{className:"sub"},"Access, data mode, and how other tools connect to this roster"))),
+
+    h("div",{className:"set-card",style:{borderLeft:"4px solid var(--teal, #00818B)"}},
+      h("h3",null,"Backup & restore"),
+      h("div",{className:"desc"},"The roster backs itself up automatically every time it loads (last 12 kept). If records are ever lost, restore them here."),
+      h("p",{style:{fontSize:13.5,color:"var(--mid)",margin:"4px 0 12px"}},
+        latest ? h(R.Fragment,null,"Most recent backup: ",h("strong",null,new Date(+latest.ts).toLocaleString())," — ",h("strong",null,latest.count+" people"),".")
+               : (backups===null ? "Checking for backups…" : "No automatic backups have been captured yet.")),
+      h("div",{style:{display:"flex",gap:10,flexWrap:"wrap"}},
+        h("button",{className:"btn btn-primary",disabled:busy||!latest,onClick:doRestoreBackup}, busy?"Working…":"Restore from latest backup"),
+        h("button",{className:"btn btn-ghost",disabled:busy,style:{color:"#b93b3b",borderColor:"#f0cccc"},onClick:doRestoreSeed}, "Restore everyone from app data")),
+      h("p",{style:{fontSize:12.5,color:"var(--muted)",margin:"12px 0 0"}},
+        "\u201cRestore everyone from app data\u201d rebuilds the full roster from the version built into this app (all people + comp plans). Photos are pulled back down from the Hype Board automatically after any restore.")
+    ),
 
     h("div",{className:"set-card"},
       h("h3",null,"Funding Hype Board sync"),
