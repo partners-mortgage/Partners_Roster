@@ -296,6 +296,19 @@ table.roster{width:100%;border-collapse:collapse;min-width:900px}
 .org-card:hover{border-color:var(--teal);box-shadow:0 6px 16px rgba(0,0,0,.10)}
 .org-nm{font-weight:700;font-size:13.5px;color:var(--dark);line-height:1.15}
 .org-rl{font-size:11.5px;color:var(--muted)}
+.org-card.over{border-color:var(--teal);box-shadow:0 0 0 3px var(--teal-light);transform:translateY(-1px)}
+.org-card.dragging{opacity:.45}
+.org-card [draggable]{cursor:grab}
+.org-edit{margin-left:2px;border:1px solid var(--border);background:#fff;color:var(--muted);border-radius:8px;
+  width:26px;height:26px;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;flex-shrink:0;transition:.15s}
+.org-edit:hover{color:var(--teal);border-color:var(--teal);background:var(--teal-light)}
+.org-dropbar{margin:14px 0 4px;border:2px dashed transparent;border-radius:12px;padding:10px 14px;text-align:center;
+  font-size:12.5px;color:var(--muted);transition:.15s}
+.org-dropbar.armed{border-color:var(--border);background:var(--offwhite);color:var(--mid)}
+.org-dropbar.over{border-color:var(--teal);background:var(--teal-light);color:var(--teal-dark);font-weight:600}
+.qedit{position:fixed;z-index:120;top:50%;left:50%;transform:translate(-50%,-50%);width:min(440px,92vw);
+  background:#fff;border-radius:16px;box-shadow:0 24px 60px rgba(0,0,0,.28);padding:22px}
+.qedit-h{font-size:16px;color:var(--dark);margin-bottom:14px}
 @media(max-width:560px){.form-grid{grid-template-columns:1fr}}
 .f-label{font-family:var(--ff-disp);text-transform:uppercase;letter-spacing:.7px;
   font-size:11px;color:var(--mid);font-weight:700;display:block;margin-bottom:5px}
@@ -932,6 +945,16 @@ function RosterApp(){
       flash(emp.fullName+" deleted");
     }catch(e){ console.error(e); flash("Delete failed: "+e.message,"err"); }
   }
+  async function reassignReportsTo(id, managerId){
+    var emp = (emps||[]).filter(function(e){return e.employeeId===id;})[0];
+    if(!emp) return;
+    try{
+      await DB.save(Object.assign({}, emp, {reportsTo: managerId||""}));
+      await refresh();
+      var mgr = managerId && (emps||[]).filter(function(e){return e.employeeId===managerId;})[0];
+      flash(managerId ? (emp.fullName+" now reports to "+(mgr?mgr.fullName:"")) : (emp.fullName+" moved to top level"));
+    }catch(e){ console.error(e); flash("Couldn't update reporting: "+e.message,"err"); }
+  }
   async function restoreSeed(){
     try{
       flash("Restoring full roster…");
@@ -1011,7 +1034,7 @@ function RosterApp(){
       view==="grid" && h(GridView,{emps:emps,q:q,filters:gridFilters,setFilters:setGridFilters,
         open:function(e){setSel(e);},onNew:newEmp,admin:admin}),
       view==="celebrations" && h(Celebrations,{emps:emps,open:function(e){setSel(e);}}),
-      view==="org" && h(OrgChart,{emps:emps,open:function(e){setSel(e);}}),
+      view==="org" && h(OrgChart,{emps:emps,open:function(e){setSel(e);},onReassign:reassignReportsTo,admin:admin,flash:flash}),
       view==="settings" && h(Settings,{emps:emps,flash:flash,refresh:refresh,onPullPhotos:syncPhotos,onPushAll:pushAll,
         onRestoreSeed:restoreSeed,onRestoreBackup:restoreBackupLatest,getBackups:getBackupList})
     ),
@@ -1465,24 +1488,86 @@ function OrgChart(p){
   var rootsWithKids = roots.filter(function(e){ return kids[e.employeeId]; }).sort(byName);
   var lone = roots.filter(function(e){ return !kids[e.employeeId]; }).sort(byName);
 
-  function card(e){ return h("div",{className:"org-card",onClick:function(){ p.open(e); }},
-    h(Avatar,{emp:e,sz:32}),
-    h("div",null, h("div",{className:"org-nm"},e.fullName), h("div",{className:"org-rl"}, e.role||"" ))); }
+  var _d=useState(null),dragId=_d[0],setDragId=_d[1];
+  var _o=useState(null),overId=_o[0],setOverId=_o[1];
+  var _ed=useState(null),editId=_ed[0],setEditId=_ed[1];
+  var canEdit = p.admin;
+
+  function descendantsOf(id){
+    var out={}, stack=(kids[id]||[]).slice();
+    while(stack.length){ var c=stack.pop(); if(out[c.employeeId]) continue; out[c.employeeId]=1; (kids[c.employeeId]||[]).forEach(function(k){stack.push(k);}); }
+    return out;
+  }
+  function assign(id, managerId){
+    if(!id) return;
+    if(id===managerId){ p.flash&&p.flash("Someone can't report to themselves","err"); return; }
+    if(managerId && descendantsOf(id)[managerId]){ p.flash&&p.flash("That would create a loop in the chart","err"); return; }
+    p.onReassign(id, managerId||"");
+  }
+  function doDrop(targetId){
+    var id=dragId; setOverId(null); setDragId(null);
+    if(id) assign(id, targetId);
+  }
+
+  function card(e){
+    var dragProps = canEdit ? {
+      draggable:true,
+      onDragStart:function(ev){ setDragId(e.employeeId); try{ev.dataTransfer.setData("text/plain",e.employeeId);ev.dataTransfer.effectAllowed="move";}catch(x){} },
+      onDragEnd:function(){ setDragId(null); setOverId(null); },
+      onDragOver:function(ev){ if(dragId&&dragId!==e.employeeId){ ev.preventDefault(); } },
+      onDragEnter:function(){ if(dragId&&dragId!==e.employeeId) setOverId(e.employeeId); },
+      onDragLeave:function(){ if(overId===e.employeeId) setOverId(null); },
+      onDrop:function(ev){ ev.preventDefault(); doDrop(e.employeeId); }
+    } : {};
+    return h("div",Object.assign({className:"org-card"+(overId===e.employeeId?" over":"")+(dragId===e.employeeId?" dragging":""),
+        onClick:function(){ p.open(e); }}, dragProps),
+      h(Avatar,{emp:e,sz:32}),
+      h("div",{style:{flex:1,minWidth:0}}, h("div",{className:"org-nm"},e.fullName), h("div",{className:"org-rl"}, e.role||"" )),
+      canEdit ? h("button",{className:"org-edit",title:"Set who they report to",
+        onClick:function(ev){ ev.stopPropagation(); setEditId(e.employeeId); }}, h(Icon,{n:"org",s:14})) : null
+    );
+  }
   function node(e){ var cs=kids[e.employeeId];
     return h("li",{key:e.employeeId}, card(e), (cs&&cs.length)? h("ul",null, cs.map(node)) : null); }
+
+  var editEmp = editId ? byId[editId] : null;
+  var editDesc = editId ? descendantsOf(editId) : {};
+  var editOpts = active.filter(function(x){ return x.employeeId!==editId && !editDesc[x.employeeId]; })
+    .sort(byName).map(function(x){ return {id:x.employeeId,label:x.fullName,sub:(x.role||"")+(x.team?" \u00b7 "+x.team:"")}; });
 
   return h("div",{className:"page"},
     h("div",{className:"page-head"},h("div",null,
       h("div",{className:"eyebrow"},"Directory"),h("h1",null,"Org Chart"),
-      h("div",{className:"sub"},"Built live from each person's \u201cReports to\u201d. Click a card to open the profile."))),
+      h("div",{className:"sub"}, canEdit
+        ? "Drag a card onto a person to set who they report to, or use the \u2318 button on a card. Click a card to open the profile."
+        : "Built live from each person's \u201cReports to.\u201d Click a card to open the profile."))),
+
     rootsWithKids.length ? h("div",{className:"org-scroll"},
         rootsWithKids.map(function(r){ return h("ul",{className:"org-tree",key:r.employeeId, style:{marginBottom:30}}, node(r)); })
       ) : h("div",{className:"empty"},h("h3",null,"No reporting chains yet"),
-          "Open a profile \u2192 Edit \u2192 set \u201cReports to.\u201d The chart builds itself as you go."),
+          canEdit ? "Drag people together, or use the \u2318 button on a card to set who they report to." : "No reporting relationships have been set yet."),
+
+    canEdit ? h("div",{className:"org-dropbar"+(dragId?" armed":"")+(overId==="__top__"?" over":""),
+        onDragOver:function(ev){ if(dragId){ ev.preventDefault(); setOverId("__top__"); } },
+        onDragLeave:function(){ if(overId==="__top__") setOverId(null); },
+        onDrop:function(ev){ ev.preventDefault(); doDrop(""); } },
+      dragId ? "Drop here to make top-level (reports to no one)" : "Tip: drag a card here to remove it from a reporting chain") : null,
+
     lone.length ? h("div",{style:{marginTop:24}},
-        h("div",{className:"sec-title",style:{marginBottom:10}},"Not yet placed in a reporting chain ("+lone.length+")"),
+        h("div",{className:"sec-title",style:{marginBottom:4}},"Not yet placed in a reporting chain ("+lone.length+")"),
+        canEdit ? h("div",{style:{fontSize:12.5,color:"var(--muted)",marginBottom:10}},"Drag one onto a person above, or click the \u2318 button to pick their manager.") : null,
         h("div",{style:{display:"flex",flexWrap:"wrap",gap:10}}, lone.map(function(e){ return h("div",{key:e.employeeId},card(e)); }))
-      ) : null
+      ) : null,
+
+    editEmp ? h("div",{className:"scrim",onClick:function(){setEditId(null);}}) : null,
+    editEmp ? h("div",{className:"qedit"},
+        h("div",{className:"qedit-h"}, "Who does ", h("strong",null,editEmp.fullName), " report to?"),
+        h(SearchSelect,{value:editEmp.reportsTo||"", placeholder:"Search a person by name, role, or team\u2026",
+          options:editOpts, onChange:function(id){ assign(editId, id); setEditId(null); }}),
+        h("div",{style:{display:"flex",justifyContent:"space-between",marginTop:14}},
+          h("button",{className:"btn btn-ghost",onClick:function(){ assign(editId,""); setEditId(null); }},"Top level (no one)"),
+          h("button",{className:"btn btn-ghost",onClick:function(){ setEditId(null); }},"Cancel")))
+      : null
   );
 }
 
