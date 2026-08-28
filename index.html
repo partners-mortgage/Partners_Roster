@@ -280,9 +280,10 @@ table.roster{width:100%;border-collapse:collapse;min-width:900px}
 .ss-sub{font-size:12px;color:var(--muted)}
 /* org chart */
 .org-scroll{overflow:auto;padding:18px 6px 6px}
+.org-treewrap{display:flex;flex-direction:column;align-items:center;gap:30px;width:max-content;min-width:100%}
 .org-tree, .org-tree ul{display:flex;justify-content:center;list-style:none;padding:0;margin:0}
-.org-tree{width:max-content;margin:0 auto}
 .org-tree ul{padding-top:26px;position:relative}
+.org-tree{width:max-content}
 .org-tree li{list-style:none;position:relative;padding:26px 12px 0;text-align:center}
 .org-tree li::before,.org-tree li::after{content:"";position:absolute;top:0;right:50%;width:50%;height:26px;border-top:2px solid var(--border)}
 .org-tree li::after{right:auto;left:50%;border-left:2px solid var(--border)}
@@ -1512,6 +1513,22 @@ function OrgChart(p){
   var _ed=useState(null),editId=_ed[0],setEditId=_ed[1];
   var canEdit = p.admin;
 
+  // Auto-shrink the chart to fit one landscape page when printing / saving to PDF.
+  useEffect(function(){
+    function fit(){
+      var el=document.querySelector(".org-scroll"); if(!el) return;
+      el.style.transformOrigin="top left"; el.style.transform=""; el.style.width=""; el.style.height="";
+      var w=el.scrollWidth, hh=el.scrollHeight;
+      var availW=960, availH=650;                       // ~Letter landscape printable area (px @96dpi) minus header
+      var s=Math.min(availW/w, availH/hh, 1);
+      if(s<1){ el.style.transform="scale("+s+")"; el.style.width=(w*s)+"px"; el.style.height=(hh*s)+"px"; }
+    }
+    function unfit(){ var el=document.querySelector(".org-scroll"); if(el){ el.style.transform=""; el.style.width=""; el.style.height=""; } }
+    window.addEventListener("beforeprint",fit);
+    window.addEventListener("afterprint",unfit);
+    return function(){ window.removeEventListener("beforeprint",fit); window.removeEventListener("afterprint",unfit); };
+  },[]);
+
   function descendantsOf(id){
     var out={}, stack=(kids[id]||[]).slice();
     while(stack.length){ var c=stack.pop(); if(out[c.employeeId]) continue; out[c.employeeId]=1; (kids[c.employeeId]||[]).forEach(function(k){stack.push(k);}); }
@@ -1567,7 +1584,8 @@ function OrgChart(p){
       h("button",{className:"btn btn-ghost no-print",onClick:function(){ window.print(); }}, h(Icon,{n:"dl",s:16}), "Print / Save PDF")),
 
     rootsWithKids.length ? h("div",{className:"org-scroll"},
-        rootsWithKids.map(function(r){ return h("ul",{className:"org-tree",key:r.employeeId, style:{marginBottom:30}}, node(r)); })
+        h("div",{className:"org-treewrap"},
+          rootsWithKids.map(function(r){ return h("ul",{className:"org-tree",key:r.employeeId}, node(r)); }))
       ) : h("div",{className:"empty"},h("h3",null,"No reporting chains yet"),
           canEdit ? "Drag people together, or use the \u2318 button on a card to set who they report to." : "No reporting relationships have been set yet."),
 
