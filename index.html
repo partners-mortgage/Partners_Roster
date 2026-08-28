@@ -323,7 +323,7 @@ table.roster{width:100%;border-collapse:collapse;min-width:900px}
   .page-head{ display:none !important; }
   .org-print-head{ display:flex !important; }
   .org-scroll{ overflow:visible !important; padding:0 !important; }
-  .org-tree{ width:auto !important; }
+  .org-treewrap{ min-width:0 !important; gap:24px; }
   .org-tree li, .org-card{ break-inside:avoid; page-break-inside:avoid; }
   .org-card{ box-shadow:none !important; min-width:118px; padding:6px 9px;
     -webkit-print-color-adjust:exact; print-color-adjust:exact; }
@@ -1513,17 +1513,29 @@ function OrgChart(p){
   var _ed=useState(null),editId=_ed[0],setEditId=_ed[1];
   var canEdit = p.admin;
 
-  // Auto-shrink the chart to fit one landscape page when printing / saving to PDF.
+  // Scale the chart to fill one landscape page when printing / saving to PDF:
+  // grows to use the whole sheet when small, shrinks to fit when large.
   useEffect(function(){
     function fit(){
-      var el=document.querySelector(".org-scroll"); if(!el) return;
-      el.style.transformOrigin="top left"; el.style.transform=""; el.style.width=""; el.style.height="";
+      var el=document.querySelector(".org-treewrap"); if(!el) return;
+      var host=document.querySelector(".org-scroll");
+      el.style.transform=""; el.style.width=""; el.style.height=""; el.style.minWidth="0";
+      if(host){ host.style.width=""; host.style.height=""; }
       var w=el.scrollWidth, hh=el.scrollHeight;
-      var availW=960, availH=650;                       // ~Letter landscape printable area (px @96dpi) minus header
-      var s=Math.min(availW/w, availH/hh, 1);
-      if(s<1){ el.style.transform="scale("+s+")"; el.style.width=(w*s)+"px"; el.style.height=(hh*s)+"px"; }
+      if(!w || !hh){ el.style.minWidth=""; return; }
+      var availW=980, availH=660;                      // Letter landscape printable area minus the header
+      var s=Math.min(availW/w, availH/hh);             // no cap: scales up to fill, down to fit
+      el.style.transformOrigin="top center";
+      el.style.transform="scale("+s+")";
+      if(host){ host.style.width=availW+"px"; host.style.height=(hh*s)+"px"; }
+      el.style.width=w+"px";
+      el.style.marginLeft=Math.max(0,(availW-w*s)/2)+"px";   // center on the sheet
     }
-    function unfit(){ var el=document.querySelector(".org-scroll"); if(el){ el.style.transform=""; el.style.width=""; el.style.height=""; } }
+    function unfit(){
+      var el=document.querySelector(".org-treewrap"), host=document.querySelector(".org-scroll");
+      if(el){ el.style.transform=""; el.style.width=""; el.style.height=""; el.style.minWidth=""; el.style.marginLeft=""; }
+      if(host){ host.style.width=""; host.style.height=""; }
+    }
     window.addEventListener("beforeprint",fit);
     window.addEventListener("afterprint",unfit);
     return function(){ window.removeEventListener("beforeprint",fit); window.removeEventListener("afterprint",unfit); };
