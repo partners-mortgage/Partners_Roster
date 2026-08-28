@@ -309,6 +309,25 @@ table.roster{width:100%;border-collapse:collapse;min-width:900px}
 .qedit{position:fixed;z-index:120;top:50%;left:50%;transform:translate(-50%,-50%);width:min(440px,92vw);
   background:#fff;border-radius:16px;box-shadow:0 24px 60px rgba(0,0,0,.28);padding:22px}
 .qedit-h{font-size:16px;color:var(--dark);margin-bottom:14px}
+.org-print-head{display:none;align-items:center;gap:12px;padding:0 0 12px;margin-bottom:18px;border-bottom:2px solid var(--teal)}
+.org-print-head .t{font-family:var(--ff-disp);font-weight:800;font-size:20px;letter-spacing:.5px;color:var(--dark);text-transform:uppercase}
+.org-print-head .d{margin-left:auto;font-size:12px;color:var(--muted)}
+@media print{
+  @page{ size:landscape; margin:12mm; }
+  body{ background:#fff !important; }
+  .sidebar,.topbar,.org-dropbar,.org-edit,.no-print,.scrim,.drawer,.qedit,.toast,.org-notplaced{ display:none !important; }
+  .shell{ display:block !important; }
+  .main{ margin:0 !important; height:auto !important; overflow:visible !important; }
+  .page{ padding:0 !important; }
+  .page-head{ display:none !important; }
+  .org-print-head{ display:flex !important; }
+  .org-scroll{ overflow:visible !important; padding:0 !important; }
+  .org-tree{ width:auto !important; }
+  .org-tree li, .org-card{ break-inside:avoid; page-break-inside:avoid; }
+  .org-card{ box-shadow:none !important; min-width:118px; padding:6px 9px;
+    -webkit-print-color-adjust:exact; print-color-adjust:exact; }
+  .badge,.av{ -webkit-print-color-adjust:exact; print-color-adjust:exact; }
+}
 @media(max-width:560px){.form-grid{grid-template-columns:1fr}}
 .f-label{font-family:var(--ff-disp);text-transform:uppercase;letter-spacing:.7px;
   font-size:11px;color:var(--mid);font-weight:700;display:block;margin-bottom:5px}
@@ -1536,11 +1555,16 @@ function OrgChart(p){
     .sort(byName).map(function(x){ return {id:x.employeeId,label:x.fullName,sub:(x.role||"")+(x.team?" \u00b7 "+x.team:"")}; });
 
   return h("div",{className:"page"},
-    h("div",{className:"page-head"},h("div",null,
-      h("div",{className:"eyebrow"},"Directory"),h("h1",null,"Org Chart"),
-      h("div",{className:"sub"}, canEdit
-        ? "Drag a card onto a person to set who they report to, or use the \u2318 button on a card. Click a card to open the profile."
-        : "Built live from each person's \u201cReports to.\u201d Click a card to open the profile."))),
+    h("div",{className:"org-print-head"},
+      h("div",{className:"t"},"Partners Mortgage \u00b7 Organizational Chart"),
+      h("div",{className:"d"}, new Date().toLocaleDateString(undefined,{year:"numeric",month:"long",day:"numeric"}))),
+    h("div",{className:"page-head"},
+      h("div",null,
+        h("div",{className:"eyebrow"},"Directory"),h("h1",null,"Org Chart"),
+        h("div",{className:"sub"}, canEdit
+          ? "Drag a card onto a person to set who they report to, or use the \u2318 button on a card. Click a card to open the profile."
+          : "Built live from each person's \u201cReports to.\u201d Click a card to open the profile.")),
+      h("button",{className:"btn btn-ghost no-print",onClick:function(){ window.print(); }}, h(Icon,{n:"dl",s:16}), "Print / Save PDF")),
 
     rootsWithKids.length ? h("div",{className:"org-scroll"},
         rootsWithKids.map(function(r){ return h("ul",{className:"org-tree",key:r.employeeId, style:{marginBottom:30}}, node(r)); })
@@ -1553,7 +1577,7 @@ function OrgChart(p){
         onDrop:function(ev){ ev.preventDefault(); doDrop(""); } },
       dragId ? "Drop here to make top-level (reports to no one)" : "Tip: drag a card here to remove it from a reporting chain") : null,
 
-    lone.length ? h("div",{style:{marginTop:24}},
+    lone.length ? h("div",{className:"org-notplaced",style:{marginTop:24}},
         h("div",{className:"sec-title",style:{marginBottom:4}},"Not yet placed in a reporting chain ("+lone.length+")"),
         canEdit ? h("div",{style:{fontSize:12.5,color:"var(--muted)",marginBottom:10}},"Drag one onto a person above, or click the \u2318 button to pick their manager.") : null,
         h("div",{style:{display:"flex",flexWrap:"wrap",gap:10}}, lone.map(function(e){ return h("div",{key:e.employeeId},card(e)); }))
