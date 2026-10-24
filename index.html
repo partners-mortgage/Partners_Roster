@@ -282,13 +282,86 @@ var PLAT = { db: null, user: null };
 function cap(name){ try { return (window.claude && window.claude.use) ? window.claude.use(name) : Promise.resolve(null); } catch(e){ return Promise.resolve(null); } }
 var _flash = function(){};
 function strip(o){ return JSON.parse(JSON.stringify(o)); }
+function ssGet(k){ try{ return window.sessionStorage.getItem(k); }catch(e){ return null; } }
+function ssSet(k,v){ try{ window.sessionStorage.setItem(k,v); }catch(e){} }
+
+/* ---- Two homes: inside claude.ai the artifact db is used; anywhere else (GitHub Pages,
+   a local file) the page falls back to the live Firebase database, like the original. ---- */
+var FB_CONFIG = {
+  apiKey: "AIzaSyDgIx9ZleMVvKpRLTS53z_AwCrFYtdCNiQ",
+  authDomain: "fundinghypeboard.firebaseapp.com",
+  databaseURL: "https://fundinghypeboard-default-rtdb.firebaseio.com",
+  projectId: "fundinghypeboard",
+  storageBucket: "fundinghypeboard.firebasestorage.app",
+  messagingSenderId: "497450792001",
+  appId: "1:497450792001:web:1b6ca784ee75d623c8c2c0"
+};
+var ACCESS_PIN = "1988", ADMIN_KEY = "partners-admin", HYPE_PATH = "roster";
+function isClaudeHosted(){
+  return new Promise(function(res){
+    if(window.claude && window.claude.use) return res(true);
+    var t = 0, iv = setInterval(function(){
+      t += 100;
+      if(window.claude && window.claude.use){ clearInterval(iv); res(true); }
+      else if(t >= 700){ clearInterval(iv); res(false); }
+    }, 100);
+  });
+}
+function loadScript(src){ return new Promise(function(res, rej){ var s = document.createElement("script"); s.src = src; s.onload = res; s.onerror = function(){ rej(new Error("Couldn’t load " + src)); }; document.head.appendChild(s); }); }
+async function initFirebaseDb(){
+  await loadScript("https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js");
+  await loadScript("https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js");
+  var app = firebase.apps.length ? firebase.app() : firebase.initializeApp(FB_CONFIG);
+  var rt = app.database(); PLAT.rt = rt;
+  function snapDoc(s){ var v = s.val(); return { id: s.key, exists: v != null, data: function(){ return v == null ? undefined : v; } }; }
+  // Same shape as the artifact db API, so the rest of the app doesn’t care which backend it’s on.
+  return {
+    doc: function(path){ var ref = rt.ref(path); return {
+      get: function(){ return ref.once("value").then(snapDoc); },
+      set: function(d){ return ref.set(d); },
+      update: function(d){ return ref.update(d); },
+      delete: function(){ return ref.remove(); } }; },
+    collection: function(path){ var ref = rt.ref(path); return {
+      onSnapshot: function(next, err){
+        var cb = function(s){ var v = s.val() || {}; next({ docs: Object.keys(v).map(function(k){ return { id: k, exists: true, data: function(){ return v[k]; } }; }) }); };
+        ref.on("value", cb, function(e){ if(err) err({ code: "unavailable", message: e.message }); });
+        return function(){ ref.off("value", cb); };
+      } }; }
+  };
+}
+/* Funding Hype Board sync (Firebase mode only): /roster/<key> = {name, photo} */
+function normName(s){ return String(s||"").toLowerCase().replace(/[^a-z0-9]/g,""); }
+function hypeKey(name){ return "lo_" + String(name||"").toLowerCase().replace(/[^a-z0-9\s]/g,"").trim().replace(/\s+/g,"_"); }
+async function readHype(){ var s = await PLAT.rt.ref(HYPE_PATH).once("value"); return s.val() || {}; }
+async function mirrorToHypeBoard(emp){
+  if(!PLAT.rt || !emp || !emp.fullName) return;
+  var roster = await readHype(), target = normName(emp.fullName), existing = null;
+  Object.keys(roster).forEach(function(k){ if(roster[k] && normName(roster[k].name) === target) existing = k; });
+  if(emp.status === "active" && String(emp.nmls||"").trim()){
+    var patch = { name: emp.fullName };
+    if(emp.photoUrl) patch.photo = emp.photoUrl; else if(!existing) patch.photo = null;
+    await PLAT.rt.ref(HYPE_PATH + "/" + (existing || hypeKey(emp.fullName))).update(patch);
+  } else if(existing){ await PLAT.rt.ref(HYPE_PATH + "/" + existing).remove(); }
+}
+async function mergeHypePhotos(list){
+  if(!PLAT.rt) return 0;
+  var roster = await readHype(), map = {}, n = 0;
+  Object.keys(roster).forEach(function(k){ var r = roster[k]; if(r && r.photo) map[normName(r.name || k.replace(/^lo_/,""))] = r.photo; });
+  for(var i=0;i<list.length;i++){ var e = list[i], ph = map[normName(e.fullName)];
+    if(ph && !e.photoUrl){ try{ await PLAT.rt.ref(EMP + "/" + e.employeeId).update({ photoUrl: ph, photoUpdatedAt: new Date().toISOString() }); n++; }catch(x){} } }
+  return n;
+}
 
 async function dbSave(emp){
   var e = strip(emp); e.updatedAt = new Date().toISOString();
   await PLAT.db.doc(EMP + "/" + e.employeeId).set(e);
+  if(PLAT.mode === "firebase") mirrorToHypeBoard(e).catch(function(err){ console.warn("Hype sync:", err); });
   return e;
 }
-async function dbRemove(id){ await PLAT.db.doc(EMP + "/" + id).delete(); }
+async function dbRemove(id, name){
+  await PLAT.db.doc(EMP + "/" + id).delete();
+  if(PLAT.mode === "firebase" && name){ try{ await PLAT.rt.ref(HYPE_PATH + "/" + hypeKey(name)).remove(); }catch(e){} }
+}
 
 /* ---- backups (photos stripped; one doc per snapshot, index in rosterMeta/backups) ---- */
 async function readBackupIndex(){
@@ -324,6 +397,11 @@ async function restoreFromBackup(ts, current){
 
 /* ---- downloads ---- */
 async function saveFile(filename, data){
+  if(PLAT.mode === "firebase"){
+    var blob = data instanceof Blob ? data : new Blob([data], { type: "text/csv" });
+    var a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = filename; document.body.appendChild(a); a.click(); a.remove();
+    return;
+  }
   var dl = await cap("downloads");
   if(!dl){ _flash("Downloads aren’t available in this view", "err"); return; }
   try { await dl.save({ filename: filename, data: data }); }
@@ -403,13 +481,13 @@ function Avatar(p){ var e = p.emp; return h("div",{className:"av av-"+p.sz+(p.ri
 /* Confirm / type-to-confirm modal (replaces prompt/confirm, which are blocked in the viewer) */
 function Modal(p){
   var _v = useState(""), v = _v[0], setV = _v[1];
-  var ok = !p.typeToConfirm || v.trim() === p.typeToConfirm;
+  var ok = p.secret ? v === p.secret : (!p.typeToConfirm || v.trim() === p.typeToConfirm);
   return h(R.Fragment,null,
     h("div",{className:"scrim",style:{zIndex:115},onClick:p.onCancel}),
     h("div",{className:"modal"},
       h("div",{className:"modal-h"},p.title),
       p.body ? h("p",null,p.body) : null,
-      p.typeToConfirm ? h("input",{className:"f-in",autoFocus:true,value:v,placeholder:p.typeToConfirm,onChange:function(e){setV(e.target.value);},
+      (p.typeToConfirm || p.secret) ? h("input",{className:"f-in",autoFocus:true,value:v,type:p.secret?"password":"text",placeholder:p.secret?"":p.typeToConfirm,onChange:function(e){setV(e.target.value);},
         onKeyDown:function(e){ if(e.key==="Enter" && ok) p.onConfirm(); }}) : null,
       h("div",{style:{display:"flex",justifyContent:"flex-end",gap:10,marginTop:16}},
         h("button",{className:"btn btn-ghost",onClick:p.onCancel},"Cancel"),
@@ -431,7 +509,8 @@ function App(){
   var _sb = useState(false), sbOpen = _sb[0], setSbOpen = _sb[1];
   var _gf = useState({}), gridFilters = _gf[0], setGridFilters = _gf[1];
   var _modal = useState(null), modal = _modal[0], setModal = _modal[1];
-  var toastT = useRef(null), backedUp = useRef(false);
+  var _ul = useState(ssGet("pm_unlocked")==="1"), unlocked = _ul[0], setUnlocked = _ul[1];
+  var toastT = useRef(null), backedUp = useRef(false), merged = useRef(false);
 
   function flash(msg, kind){ setToast({msg:msg,kind:kind||"ok"}); clearTimeout(toastT.current); toastT.current = setTimeout(function(){ setToast(null); }, 2800); }
   _flash = flash;
@@ -439,16 +518,31 @@ function App(){
   useEffect(function(){
     var unsub = null, dead = false;
     (async function(){
-      var db = await cap("db");
+      var hosted = await isClaudeHosted();
       if(dead) return;
-      if(!db){ setStatus("nodb"); return; }
-      PLAT.db = db;
-      var user = await cap("user"); PLAT.user = user;
-      var w = user ? await user.can("data.write") : null;
-      setCanWrite(w !== false);
+      var db;
+      if(hosted){
+        db = await cap("db");
+        if(dead) return;
+        if(!db){ setStatus("nodb"); return; }
+        PLAT.mode = "artifact"; PLAT.db = db;
+        var user = await cap("user"); PLAT.user = user;
+        var w = user ? await user.can("data.write") : null;
+        setCanWrite(w !== false);
+      } else {
+        PLAT.mode = "firebase";
+        try { db = await initFirebaseDb(); } catch(e){ console.error(e); setStatus("error"); return; }
+        PLAT.db = db;
+        setCanWrite(ssGet("pm_admin")==="1");
+      }
       unsub = db.collection(EMP).onSnapshot(function(snap){
-        setEmps(snap.docs.map(function(d){ return d.data(); }));
+        var list = snap.docs.map(function(d){ return d.data(); }).filter(function(e){ return e && e.employeeId; });
+        setEmps(list);
         setStatus("ready");
+        if(PLAT.mode === "firebase" && !merged.current && list.length){
+          merged.current = true;
+          mergeHypePhotos(list).then(function(n){ if(n) flash("Loaded " + n + " photo" + (n===1?"":"s") + " from the Hype Board"); }).catch(function(){});
+        }
       }, function(err){ setStatus(err && err.code === "revoked" ? "nodb" : "error"); });
     })();
     return function(){ dead = true; if(unsub) unsub(); };
@@ -469,7 +563,15 @@ function App(){
     if(e && e.code === "invalid_argument"){ setCanWrite(false); flash("You have view-only access to this roster", "err"); }
     else flash("Save failed: " + ((e && (e.message||e.code)) || e), "err");
   }
-  function guard(fn){ if(!canWrite){ flash("You have view-only access to this roster", "err"); return; } fn(); }
+  function guard(fn){
+    if(canWrite) return fn();
+    if(PLAT.mode === "firebase"){
+      setModal({ title:"Admin key required", body:"Enter the admin key to edit records.", secret:ADMIN_KEY, confirmLabel:"Unlock editing",
+        onConfirm:function(){ ssSet("pm_admin","1"); setCanWrite(true); setModal(null); fn(); } });
+      return;
+    }
+    flash("You have view-only access to this roster", "err");
+  }
 
   async function saveEmp(emp){
     try { await dbSave(emp); setEdit(null); setSelId(emp.employeeId); flash(emp.employeeId + " saved"); }
@@ -482,7 +584,7 @@ function App(){
     try { await dbSave(n); flash(emp.fullName + " marked " + ns); } catch(e){ writeErr(e); }
   }
   async function deleteEmp(emp){
-    try { await snapshotEmployees(emps, "before deleting " + emp.employeeId); await dbRemove(emp.employeeId); setSelId(null); flash(emp.fullName + " deleted"); }
+    try { await snapshotEmployees(emps, "before deleting " + emp.employeeId); await dbRemove(emp.employeeId, emp.fullName); setSelId(null); flash(emp.fullName + " deleted"); }
     catch(e){ writeErr(e); }
   }
   async function reassign(id, managerId){
@@ -500,8 +602,13 @@ function App(){
   }
 
   if(status === "loading") return h("div",{className:"empty"},"Loading records…");
-  if(status === "nodb" || status === "error") return h("div",{className:"empty"},
+  if(status === "nodb") return h("div",{className:"empty"},
     h("h3",null,"Roster unavailable"), "Sign in to claude.ai with access to this roster to view it.");
+  if(status === "error") return h("div",{className:"empty"},
+    h("h3",null,"Couldn’t reach the roster database"),
+    h("div",null,"This preview can’t connect to Firebase. Open the roster from GitHub Pages (or the claude.ai artifact link) instead."));
+  if(PLAT.mode === "firebase" && !unlocked) return h(PinGate,{onUnlock:function(){ ssSet("pm_unlocked","1"); setUnlocked(true); }});
+  var showEdit = canWrite || PLAT.mode === "firebase";
 
   var sel = selId ? emps.filter(function(e){ return e.employeeId === selId; })[0] : null;
   var activeCount = emps.filter(function(e){ return e.status === "active"; }).length;
@@ -515,15 +622,15 @@ function App(){
         canWrite ? h("div",{style:{marginTop:14}},h("button",{className:"btn btn-primary",onClick:function(){ setEdit(blankEmp(nextId(emps))); }},h(Icon,{n:"plus",s:16}),"Add the first employee")) : null)) : null,
       emps.length && view==="dashboard" ? h(Dashboard,{emps:emps,open:function(e){setSelId(e.employeeId);},goGrid:function(f){ setGridFilters(f||{}); go("employees"); }}) : null,
       emps.length && view==="employees" ? h(GridView,{emps:emps,q:q,filters:gridFilters,setFilters:setGridFilters,open:function(e){setSelId(e.employeeId);},
-        onNew:function(){ guard(function(){ setEdit(blankEmp(nextId(emps))); }); },canWrite:canWrite}) : null,
+        onNew:function(){ guard(function(){ setEdit(blankEmp(nextId(emps))); }); },canWrite:showEdit}) : null,
       emps.length && view==="celebrations" ? h(Celebrations,{emps:emps,open:function(e){setSelId(e.employeeId);}}) : null,
-      emps.length && view==="org" ? h(OrgChart,{emps:emps,open:function(e){setSelId(e.employeeId);},onReassign:reassign,canEdit:canWrite,flash:flash}) : null,
-      view==="admin" ? h(Settings,{emps:emps,canWrite:canWrite,flash:flash,
-        onRestore:function(entry){ setModal({title:"Restore roster from backup?",body:"Backup from "+new Date(+entry.ts).toLocaleString()+" ("+entry.count+" people).\nThis replaces the current live records. Current headshots are kept.",
-          confirmLabel:"Restore",onConfirm:function(){ setModal(null); restoreLatest(entry); }}); },
+      emps.length && view==="org" ? h(OrgChart,{emps:emps,open:function(e){setSelId(e.employeeId);},onReassign:function(id,m){ guard(function(){ reassign(id,m); }); },canEdit:showEdit,flash:flash}) : null,
+      view==="admin" ? h(Settings,{emps:emps,canWrite:showEdit,flash:flash,
+        onRestore:function(entry){ guard(function(){ setModal({title:"Restore roster from backup?",body:"Backup from "+new Date(+entry.ts).toLocaleString()+" ("+entry.count+" people).\nThis replaces the current live records. Current headshots are kept.",
+          confirmLabel:"Restore",onConfirm:function(){ setModal(null); restoreLatest(entry); }}); }); },
         onBackupNow:function(){ snapshotEmployees(emps,"manual").then(function(ok){ flash(ok?"Backup saved":"Backup skipped (roster too small)", ok?"ok":"err"); }).catch(writeErr); }}) : null
     ),
-    sel ? h(ProfileDrawer,{emp:sel,all:emps,canWrite:canWrite,onClose:function(){setSelId(null);},
+    sel ? h(ProfileDrawer,{emp:sel,all:emps,canWrite:showEdit,onClose:function(){setSelId(null);},
       onEdit:function(){ guard(function(){ setEdit(sel); }); },
       onToggle:function(){ guard(function(){ toggleStatus(sel); }); },
       onDelete:function(){ guard(function(){ setModal({title:"Delete "+sel.fullName+"?",danger:true,
@@ -533,6 +640,23 @@ function App(){
     modal ? h(Modal,Object.assign({onCancel:function(){setModal(null);}},modal)) : null,
     toast ? h("div",{className:"toast "+toast.kind,role:"status"},h("span",{className:"d"},toast.kind==="err"?"✕":"✓"),toast.msg) : null
   );
+}
+
+function PinGate(p){
+  var _v = useState(""), v = _v[0], setV = _v[1];
+  var _e = useState(false), err = _e[0], setErr = _e[1];
+  function submit(){ if(v === ACCESS_PIN) p.onUnlock(); else { setErr(true); setV(""); } }
+  return h("div",{style:{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",padding:20,background:"linear-gradient(155deg,#16262F,#1A2E3B 55%,#123c3c)"}},
+    h("div",{className:"card",style:{width:"100%",maxWidth:400,padding:"38px 34px 30px",textAlign:"center",borderRadius:16}},
+      h("div",{style:{display:"flex",justifyContent:"center",marginBottom:14}},h(Logo,{s:56})),
+      h("h1",{style:{fontSize:27}},"Partners Roster"),
+      h("div",{style:{fontFamily:"var(--ff-serif)",fontStyle:"italic",color:"var(--teal)",fontSize:16,margin:"2px 0 18px"}},"You matter."),
+      h("div",{style:{color:"var(--muted)",fontSize:13.5,marginBottom:18}},"Internal employee database — enter your access PIN"),
+      h("input",{className:"f-in",type:"password",inputMode:"numeric",autoFocus:true,autoComplete:"new-password",maxLength:8,value:v,placeholder:"••••",
+        style:{textAlign:"center",fontSize:26,letterSpacing:12,padding:"14px 10px",borderColor:err?"var(--red)":undefined},
+        onChange:function(e){ setV(e.target.value); setErr(false); },onKeyDown:function(e){ if(e.key==="Enter") submit(); }}),
+      h("div",{style:{color:"var(--red)",fontSize:13,minHeight:18,marginTop:8}},err?"Incorrect PIN. Try again.":""),
+      h("button",{className:"btn btn-primary",style:{width:"100%",justifyContent:"center",padding:"13px 20px"},onClick:submit},"Unlock roster")));
 }
 
 function blankEmp(id){
@@ -1005,3 +1129,4 @@ ReactDOM.createRoot(document.getElementById("root")).render(h(Boundary,null,h(Ap
 </script>
 </body>
 </html>
+
