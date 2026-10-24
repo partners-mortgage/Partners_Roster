@@ -520,11 +520,9 @@ function App(){
     (async function(){
       var hosted = await isClaudeHosted();
       if(dead) return;
-      var db;
-      if(hosted){
-        db = await cap("db");
-        if(dead) return;
-        if(!db){ setStatus("nodb"); return; }
+      var db = null;
+      if(hosted){ db = await cap("db"); if(dead) return; }
+      if(db){
         PLAT.mode = "artifact"; PLAT.db = db;
         var user = await cap("user"); PLAT.user = user;
         var w = user ? await user.can("data.write") : null;
