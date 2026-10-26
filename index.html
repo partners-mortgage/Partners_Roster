@@ -255,6 +255,24 @@ textarea.f-in{resize:vertical;min-height:66px}
 .set-card h3{font-size:16px;margin-bottom:4px}
 .set-card .desc{color:var(--muted);font-size:13.5px;margin-bottom:14px}
 .banner{background:var(--gold-light);color:var(--gold-ink);border-radius:var(--r-sm);padding:9px 14px;font-size:13px;margin-bottom:16px}
+.load-panel{background:var(--card);border:1px solid var(--border);border-radius:var(--r);padding:14px 16px;margin-bottom:14px;box-shadow:var(--shadow-sm)}
+.load-head{display:flex;align-items:center;gap:10px;margin-bottom:12px;flex-wrap:wrap}
+.load-head .t{font-family:var(--ff-disp);text-transform:uppercase;letter-spacing:1.5px;font-size:12px;color:var(--teal);font-weight:700}
+.load-head .hint{font-size:12px;color:var(--muted);margin-left:auto}
+.seg{display:inline-flex;border:1.5px solid var(--border);border-radius:var(--r-sm);overflow:hidden}
+.seg button{border:0;background:transparent;padding:5px 12px;font-size:13px;color:var(--mid)}
+.seg button.on{background:var(--teal);color:#fff}
+.load-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px}
+.load-tile{border:1.5px solid var(--border);border-radius:var(--r-sm);padding:10px 12px;cursor:pointer;background:var(--offwhite);text-align:left;font:inherit;color:inherit}
+.load-tile:hover{border-color:var(--teal)}
+.load-tile.on{border-color:var(--teal);background:var(--teal-light)}
+.load-tile .n{font-weight:600;font-size:13.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.load-tile .c{font-family:var(--ff-disp);font-weight:800;font-size:24px;line-height:1.1}
+.load-tile .s{font-size:11.5px;color:var(--muted)}
+.load-bar{height:4px;border-radius:3px;background:var(--line-soft);margin-top:7px;overflow:hidden}
+.load-bar i{display:block;height:100%;background:var(--teal)}
+.cell-link{cursor:pointer}
+.cell-link:hover{text-decoration:underline}
 .mobile-only{display:none}
 @media(max-width:820px){
   .sidebar{position:fixed;left:0;top:0;bottom:0;height:auto;z-index:200;transform:translateX(-100%);transition:transform .22s;padding-top:env(safe-area-inset-top,0px)}
@@ -279,7 +297,8 @@ var EMP = "employees", BKP = "rosterBackups", META = "rosterMeta/backups";
 
 /* ---------------- platform ---------------- */
 var PLAT = { db: null, user: null };
-function cap(name){ try { return (window.claude && window.claude.use) ? window.claude.use(name) : Promise.resolve(null); } catch(e){ return Promise.resolve(null); } }
+function withTimeout(pr, ms){ return Promise.race([Promise.resolve(pr).catch(function(){ return null; }), new Promise(function(r){ setTimeout(function(){ r(null); }, ms); })]); }
+function cap(name){ try { return (window.claude && window.claude.use) ? withTimeout(window.claude.use(name), 5000) : Promise.resolve(null); } catch(e){ return Promise.resolve(null); } }
 var _flash = function(){};
 function strip(o){ return JSON.parse(JSON.stringify(o)); }
 function ssGet(k){ try{ return window.sessionStorage.getItem(k); }catch(e){ return null; } }
@@ -525,7 +544,7 @@ function App(){
       if(db){
         PLAT.mode = "artifact"; PLAT.db = db;
         var user = await cap("user"); PLAT.user = user;
-        var w = user ? await user.can("data.write") : null;
+        var w = user ? await withTimeout(user.can("data.write"), 4000) : null;
         setCanWrite(w !== false);
       } else {
         PLAT.mode = "firebase";
@@ -533,7 +552,9 @@ function App(){
         PLAT.db = db;
         setCanWrite(ssGet("pm_admin")==="1");
       }
+      var got = false;
       unsub = db.collection(EMP).onSnapshot(function(snap){
+        got = true;
         var list = snap.docs.map(function(d){ return d.data(); }).filter(function(e){ return e && e.employeeId; });
         setEmps(list);
         setStatus("ready");
@@ -542,6 +563,7 @@ function App(){
           mergeHypePhotos(list).then(function(n){ if(n) flash("Loaded " + n + " photo" + (n===1?"":"s") + " from the Hype Board"); }).catch(function(){});
         }
       }, function(err){ setStatus(err && err.code === "revoked" ? "nodb" : "error"); });
+      setTimeout(function(){ if(!got && !dead) setStatus("timeout"); }, 15000);
     })();
     return function(){ dead = true; if(unsub) unsub(); };
   },[]);
@@ -602,6 +624,10 @@ function App(){
   if(status === "loading") return h("div",{className:"empty"},"Loading records…");
   if(status === "nodb") return h("div",{className:"empty"},
     h("h3",null,"Roster unavailable"), "Sign in to claude.ai with access to this roster to view it.");
+  if(status === "timeout") return h("div",{className:"empty"},
+    h("h3",null,"The roster database isn’t answering"),
+    h("div",null,"Your browser couldn’t get a response from Firebase. If you opened the file straight from your computer, open it from partners-mortgage.github.io instead."),
+    h("div",{style:{marginTop:14}},h("button",{className:"btn btn-primary",onClick:function(){ location.reload(); }},"Try again")));
   if(status === "error") return h("div",{className:"empty"},
     h("h3",null,"Couldn’t reach the roster database"),
     h("div",null,"This preview can’t connect to Firebase. Open the roster from GitHub Pages (or the claude.ai artifact link) instead."));
@@ -788,6 +814,7 @@ function GridView(p){
         h("button",{className:"btn btn-ghost",onClick:function(){exportRosterCSV(rows);}},h(Icon,{n:"dl",s:16}),"Export CSV"),
         h("button",{className:"btn btn-ghost",onClick:function(){exportRosterXLSX(p.emps);}},h(Icon,{n:"dl",s:16}),"Export Excel"),
         p.canWrite ? h("button",{className:"btn btn-primary",onClick:p.onNew},h(Icon,{n:"plus",s:16}),"Add employee") : null)),
+    h(LoadPanel,{emps:p.emps,f:f,setF:setF}),
     h("div",{className:"filterbar"},
       h("select",{className:"fsel",value:f.status||"active",onChange:function(e){setF({status:e.target.value});}},h("option",{value:"active"},"Active"),h("option",{value:"inactive"},"Inactive"),h("option",{value:"all"},"All statuses")),
       sel("branch","All branches",opts.branches), sel("team","All teams",opts.teams), sel("processor","All processors",opts.processors), sel("role","All roles",opts.roles),
@@ -802,8 +829,8 @@ function GridView(p){
           return h("tr",{key:e.employeeId,onClick:function(){p.open(e);}},
             h("td",null,h("div",{className:"cell-nm"},h(Avatar,{emp:e,sz:32}),h("div",null,h("div",{className:"nm"},e.fullName),h("div",{className:"em"},e.email||e.employeeId)))),
             h("td",null,e.role),
-            h("td",null,e.team?h("span",{className:"badge b-teal"},e.team):"—"),
-            h("td",null,e.processor||"—"),
+            h("td",null,e.team?h("span",{className:"badge b-teal cell-link",title:"Show only "+e.team,onClick:function(ev){ ev.stopPropagation(); setF({team:e.team}); }},e.team):"—"),
+            h("td",null,e.processor?h("span",{className:"cell-link",title:"Show only "+e.processor,onClick:function(ev){ ev.stopPropagation(); setF({processor:e.processor}); }},e.processor):"—"),
             h("td",null,e.branch||"—"),
             h("td",null,e.nmls || (e.isLoanOfficer?h("span",{className:"badge b-red"},"missing"):"—")),
             h("td",null,e.employmentType?h("span",{className:"badge "+(e.employmentType==="W2"?"b-warm":"b-gray")},e.employmentType):"—"),
@@ -812,6 +839,42 @@ function GridView(p){
         })))),
       rows.length===0 ? h("div",{className:"empty"},h("h3",null,"No matches"),"Try clearing filters or a different search.") : null,
       h("div",{className:"grid-foot"},h("span",null,rows.length+" employees"),h("span",null,"Click any row to open the full profile"))));
+}
+
+/* Workload panel: one tile per processor (or team) with headcount and 2026 units.
+   Click a tile to filter the grid to that group; click again to clear. */
+function LoadPanel(p){
+  var _m = useState("processor"), mode = _m[0], setMode = _m[1];
+  var status = p.f.status || "active";
+  var groups = useMemo(function(){
+    var g = {};
+    p.emps.forEach(function(e){
+      if(status !== "all" && e.status !== status) return;
+      var k = String(e[mode] || "").trim(); if(!k) return;
+      var o = g[k] = g[k] || { name:k, people:0, units:0, vol:0 };
+      o.people++;
+      o.units += (e.production && e.production.units2026) || 0;
+      o.vol += (e.production && e.production.volume2026) || 0;
+    });
+    return Object.keys(g).map(function(k){ return g[k]; }).sort(function(a,b){ return b.people - a.people || a.name.localeCompare(b.name); });
+  },[p.emps, mode, status]);
+  var max = Math.max.apply(null, [1].concat(groups.map(function(x){ return x.people; })));
+  var cur = p.f[mode] || "";
+  function pick(name){ var o = {}; o[mode] = cur === name ? "" : name; p.setF(o); }
+  return h("div",{className:"load-panel"},
+    h("div",{className:"load-head"},
+      h("span",{className:"t"},"Workload by"),
+      h("div",{className:"seg"},
+        h("button",{className:mode==="processor"?"on":"",onClick:function(){ setMode("processor"); }},"Processor"),
+        h("button",{className:mode==="team"?"on":"",onClick:function(){ setMode("team"); }},"Team")),
+      h("span",{className:"hint"}, cur ? "Showing only " + cur + " \u00b7 click again to clear" : "Click a tile to see just that " + mode)),
+    h("div",{className:"load-grid"}, groups.map(function(g){
+      return h("button",{key:g.name,className:"load-tile"+(cur===g.name?" on":""),onClick:function(){ pick(g.name); }},
+        h("div",{className:"n",title:g.name},g.name),
+        h("div",{className:"c"},g.people,h("span",{style:{fontSize:12,fontWeight:600,color:"var(--muted)",marginLeft:5}},g.people===1?"person":"people")),
+        h("div",{className:"s"},g.units+" units \u00b7 "+fmtMoneyShort(g.vol)+" in 2026"),
+        h("div",{className:"load-bar"},h("i",{style:{width:Math.round(g.people/max*100)+"%"}})));
+    })));
 }
 
 /* ---------------- Profile drawer ---------------- */
