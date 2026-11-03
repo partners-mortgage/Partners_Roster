@@ -426,7 +426,35 @@ async function applyRosterPatches(list){
       ["Tony Close", {productionPartner:"Tiffany", processor:"Tiffany"}]
     ].concat(underKendra(find, ["Jonathan Karabinus","Matt Fielding"]));
   }));
+  add(await createIfMissing("patch_2026_11_close_hires", list, [
+    {firstName:"Wendee", lastName:"Close"},
+    {firstName:"Tony", lastName:"Close"}
+  ], {productionPartner:"Tiffany", processor:"Tiffany", hireDate:"2026-11-03", startDate:"2026-11-03"}));
   return out;
+}
+/* Adds people who aren't on the roster yet (matched by name); existing ones just get the fields. */
+async function createIfMissing(PATCH_ID, list, people, fields){
+  if(!PLAT.rt || !list || list.length < 20) return null;
+  var flag = await PLAT.rt.ref("rosterMeta/" + PATCH_ID).once("value");
+  if(flag.val()) return null;
+  var byName = {}; list.forEach(function(e){ byName[normName(e.fullName)] = e; });
+  var all = list.slice(), n = 0, now = new Date().toISOString();
+  for(var i=0;i<people.length;i++){
+    var pp = people[i], full = (pp.firstName + " " + pp.lastName).trim(), ex = byName[normName(full)];
+    if(ex){
+      var upd = Object.assign({ updatedAt: now }, fields); delete upd.hireDate; delete upd.startDate;
+      await PLAT.rt.ref(EMP + "/" + ex.employeeId).update(upd);
+    } else {
+      var rec = blankEmp(nextId(all)); delete rec._new;
+      Object.assign(rec, pp, fields, { fullName: full, preferredName: pp.firstName,
+        slug: full.toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-|-$/g,""), createdAt: now, updatedAt: now });
+      await PLAT.rt.ref(EMP + "/" + rec.employeeId).set(JSON.parse(JSON.stringify(rec)));
+      all.push(rec);
+    }
+    n++;
+  }
+  await PLAT.rt.ref("rosterMeta/" + PATCH_ID).set({ at: now });
+  return { n: n, missing: [] };
 }
 
 async function dbSave(emp){
