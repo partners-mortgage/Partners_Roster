@@ -371,6 +371,46 @@ async function mergeHypePhotos(list){
   return n;
 }
 
+/* One-time roster corrections (Nov 2026, from Kendra): processor reassignments,
+   two departures, and three processors placed under Kendra on the org chart.
+   Matches people by name, merges only these fields, runs once (flag in rosterMeta),
+   and takes a backup first. */
+var PATCH_ID = "patch_2026_11_processors";
+async function applyProcessorPatch(list){
+  if(!PLAT.rt || !list || list.length < 20) return null;
+  var flag = await PLAT.rt.ref("rosterMeta/" + PATCH_ID).once("value");
+  if(flag.val()) return null;
+  var byName = {}; list.forEach(function(e){ byName[normName(e.fullName)] = e; });
+  function find(n){ return byName[normName(n)]; }
+  var today = new Date().toISOString().slice(0,10), now = new Date().toISOString();
+  var changes = [
+    ["Dereck Bowlen", {processor:"Amy Ryckebosch"}],
+    ["Shazia Dar", {processor:"Ashley Warbrick"}],
+    ["Matthew Lewis", {processor:"Quynh Tang"}],
+    ["Sean McDonough", {processor:"Megan"}],
+    ["Ryan Ross", {processor:"Megan"}],
+    ["Venane Brune", {processor:"Venane"}],
+    ["Nancy Kinzer", {processor:"Courtney"}],
+    ["Jay Kiel", {status:"inactive"}],
+    ["Greg Choinski", {status:"inactive"}]
+  ];
+  var kendra = find("Kendra Tetz");
+  if(kendra) ["Matt Miles","Maureen Ramsay","Venane Brune"].forEach(function(n){ changes.push([n, {reportsTo:kendra.employeeId}]); });
+  else changes.push(["Kendra Tetz", {}]);
+  await snapshotEmployees(list, "before processor updates");
+  var updates = {}, touched = {}, missing = [];
+  changes.forEach(function(c){
+    var e = find(c[0]); if(!e){ missing.push(c[0]); return; }
+    Object.keys(c[1]).forEach(function(k){ updates[e.employeeId + "/" + k] = c[1][k]; });
+    if(c[1].status === "inactive" && !e.offboardingDate) updates[e.employeeId + "/offboardingDate"] = today;
+    updates[e.employeeId + "/updatedAt"] = now; touched[e.employeeId] = 1;
+  });
+  if(Object.keys(updates).length) await PLAT.rt.ref(EMP).update(updates);
+  await PLAT.rt.ref("rosterMeta/" + PATCH_ID).set({ at: now, missing: missing });
+  ["Jay Kiel","Greg Choinski"].forEach(function(n){ var e = find(n); if(e) mirrorToHypeBoard(Object.assign({}, e, {status:"inactive"})).catch(function(){}); });
+  return { n: Object.keys(touched).length, missing: missing };
+}
+
 async function dbSave(emp){
   var e = strip(emp); e.updatedAt = new Date().toISOString();
   await PLAT.db.doc(EMP + "/" + e.employeeId).set(e);
@@ -561,6 +601,7 @@ function App(){
         if(PLAT.mode === "firebase" && !merged.current && list.length){
           merged.current = true;
           mergeHypePhotos(list).then(function(n){ if(n) flash("Loaded " + n + " photo" + (n===1?"":"s") + " from the Hype Board"); }).catch(function(){});
+          applyProcessorPatch(list).then(function(r){ if(r && r.n) flash("Applied roster updates to " + r.n + " people" + (r.missing.length ? " — not found: " + r.missing.join(", ") : "")); }).catch(function(e){ console.warn("Roster patch:", e); });
         }
       }, function(err){ setStatus(err && err.code === "revoked" ? "nodb" : "error"); });
       setTimeout(function(){ if(!got && !dead) setStatus("timeout"); }, 15000);
