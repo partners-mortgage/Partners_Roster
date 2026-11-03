@@ -375,29 +375,15 @@ async function mergeHypePhotos(list){
    two departures, and three processors placed under Kendra on the org chart.
    Matches people by name, merges only these fields, runs once (flag in rosterMeta),
    and takes a backup first. */
-var PATCH_ID = "patch_2026_11_processors";
-async function applyProcessorPatch(list){
+async function runRosterPatch(PATCH_ID, list, build){
   if(!PLAT.rt || !list || list.length < 20) return null;
   var flag = await PLAT.rt.ref("rosterMeta/" + PATCH_ID).once("value");
   if(flag.val()) return null;
   var byName = {}; list.forEach(function(e){ byName[normName(e.fullName)] = e; });
   function find(n){ return byName[normName(n)]; }
   var today = new Date().toISOString().slice(0,10), now = new Date().toISOString();
-  var changes = [
-    ["Dereck Bowlen", {processor:"Amy Ryckebosch"}],
-    ["Shazia Dar", {processor:"Ashley Warbrick"}],
-    ["Matthew Lewis", {processor:"Quynh Tang"}],
-    ["Sean McDonough", {processor:"Megan"}],
-    ["Ryan Ross", {processor:"Megan"}],
-    ["Venane Brune", {processor:"Venane"}],
-    ["Nancy Kinzer", {processor:"Courtney"}],
-    ["Jay Kiel", {status:"inactive"}],
-    ["Greg Choinski", {status:"inactive"}]
-  ];
-  var kendra = find("Kendra Tetz");
-  if(kendra) ["Matt Miles","Maureen Ramsay","Venane Brune"].forEach(function(n){ changes.push([n, {reportsTo:kendra.employeeId}]); });
-  else changes.push(["Kendra Tetz", {}]);
-  await snapshotEmployees(list, "before processor updates");
+  var changes = build(find);
+  await snapshotEmployees(list, "before " + PATCH_ID);
   var updates = {}, touched = {}, missing = [];
   changes.forEach(function(c){
     var e = find(c[0]); if(!e){ missing.push(c[0]); return; }
@@ -407,8 +393,40 @@ async function applyProcessorPatch(list){
   });
   if(Object.keys(updates).length) await PLAT.rt.ref(EMP).update(updates);
   await PLAT.rt.ref("rosterMeta/" + PATCH_ID).set({ at: now, missing: missing });
-  ["Jay Kiel","Greg Choinski"].forEach(function(n){ var e = find(n); if(e) mirrorToHypeBoard(Object.assign({}, e, {status:"inactive"})).catch(function(){}); });
+  changes.forEach(function(c){ if(c[1].status === "inactive"){ var e = find(c[0]); if(e) mirrorToHypeBoard(Object.assign({}, e, {status:"inactive"})).catch(function(){}); } });
   return { n: Object.keys(touched).length, missing: missing };
+}
+function underKendra(find, names){
+  var k = find("Kendra Tetz");
+  return k ? names.map(function(n){ return [n, {reportsTo:k.employeeId}]; }) : [["Kendra Tetz", {}]];
+}
+async function applyRosterPatches(list){
+  var out = { n: 0, missing: [] };
+  function add(r){ if(r){ out.n += r.n; out.missing = out.missing.concat(r.missing); } }
+  add(await runRosterPatch("patch_2026_11_processors", list, function(find){
+    return [
+      ["Dereck Bowlen", {processor:"Amy Ryckebosch"}],
+      ["Shazia Dar", {processor:"Ashley Warbrick"}],
+      ["Matthew Lewis", {processor:"Quynh Tang"}],
+      ["Sean McDonough", {processor:"Megan"}],
+      ["Ryan Ross", {processor:"Megan"}],
+      ["Venane Brune", {processor:"Venane"}],
+      ["Nancy Kinzer", {processor:"Courtney"}],
+      ["Jay Kiel", {status:"inactive"}],
+      ["Greg Choinski", {status:"inactive"}]
+    ].concat(underKendra(find, ["Matt Miles","Maureen Ramsay","Venane Brune"]));
+  }));
+  add(await runRosterPatch("patch_2026_11_processors_2", list, function(find){
+    return [
+      ["Andre Reikko", {processor:"Courtney"}],
+      ["Chad Caplinger", {processor:"Megan", team:"LaRelle"}],
+      ["Stacey Batiste", {processor:"Megan"}],
+      ["Michelle Paxton", {status:"inactive"}],
+      ["Wendee Close", {productionPartner:"Tiffany", processor:"Tiffany"}],
+      ["Tony Close", {productionPartner:"Tiffany", processor:"Tiffany"}]
+    ].concat(underKendra(find, ["Jonathan Karabinus","Matt Fielding"]));
+  }));
+  return out;
 }
 
 async function dbSave(emp){
@@ -507,6 +525,7 @@ function scaleImageToDataURL(file, maxDim, quality){
 }
 
 /* ---------------- helpers ---------------- */
+function sameTxt(a,b){ return String(a||"").trim().toLowerCase() === String(b||"").trim().toLowerCase(); }
 function initials(n){ if(!n) return "?"; var p = n.trim().split(/\s+/); return ((p[0]||"")[0]||"") + ((p[1]||"")[0]||""); }
 function fmtMoney(v){ return v ? "$" + Number(v).toLocaleString() : "$0"; }
 function fmtMoneyShort(v){ v = Number(v)||0; if(v>=1e6) return "$"+(v/1e6).toFixed(1)+"M"; if(v>=1e3) return "$"+Math.round(v/1e3)+"K"; return "$"+v; }
@@ -601,7 +620,7 @@ function App(){
         if(PLAT.mode === "firebase" && !merged.current && list.length){
           merged.current = true;
           mergeHypePhotos(list).then(function(n){ if(n) flash("Loaded " + n + " photo" + (n===1?"":"s") + " from the Hype Board"); }).catch(function(){});
-          applyProcessorPatch(list).then(function(r){ if(r && r.n) flash("Applied roster updates to " + r.n + " people" + (r.missing.length ? " — not found: " + r.missing.join(", ") : "")); }).catch(function(e){ console.warn("Roster patch:", e); });
+          applyRosterPatches(list).then(function(r){ if(r && r.n) flash("Applied roster updates to " + r.n + " people" + (r.missing.length ? " — not found: " + r.missing.join(", ") : "")); }).catch(function(e){ console.warn("Roster patch:", e); });
         }
       }, function(err){ setStatus(err && err.code === "revoked" ? "nodb" : "error"); });
       setTimeout(function(){ if(!got && !dead) setStatus("timeout"); }, 15000);
@@ -814,7 +833,7 @@ function GridView(p){
   var opts = useMemo(function(){
     function uniq(fn){ var s={}; p.emps.forEach(function(e){ var v=fn(e); if(v) s[v]=1; }); return Object.keys(s).sort(); }
     var st={}; p.emps.forEach(function(e){ (e.stateLicenses||[]).forEach(function(x){ if(x) st[x]=1; }); });
-    return { branches:uniq(function(e){return e.branch;}), teams:uniq(function(e){return e.team;}), roles:uniq(function(e){return e.role;}), processors:uniq(function(e){return e.processor;}), states:Object.keys(st).sort() };
+    return { branches:uniq(function(e){return e.branch;}), teams:uniq(function(e){return String(e.team||"").trim();}), roles:uniq(function(e){return e.role;}), processors:uniq(function(e){return String(e.processor||"").trim();}), states:Object.keys(st).sort() };
   },[p.emps]);
   var rows = useMemo(function(){
     var q = (p.q||"").toLowerCase().trim(), status = f.status||"active";
@@ -822,8 +841,8 @@ function GridView(p){
       if(q && [e.fullName,e.email,e.nmls,e.branch,e.team,e.role].join(" ").toLowerCase().indexOf(q)<0) return false;
       if(status!=="all" && e.status!==status) return false;
       if(f.branch && e.branch!==f.branch) return false;
-      if(f.team && e.team!==f.team) return false;
-      if(f.processor && e.processor!==f.processor) return false;
+      if(f.team && !sameTxt(e.team, f.team)) return false;
+      if(f.processor && !sameTxt(e.processor, f.processor)) return false;
       if(f.role && e.role!==f.role) return false;
       if(f.emptype && e.employmentType!==f.emptype) return false;
       if(f.state && (e.stateLicenses||[]).indexOf(f.state)<0) return false;
