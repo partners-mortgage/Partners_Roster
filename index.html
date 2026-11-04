@@ -352,11 +352,29 @@ async function initFirebaseDb(){
 function normName(s){ return String(s||"").toLowerCase().replace(/[^a-z0-9]/g,""); }
 function hypeKey(name){ return "lo_" + String(name||"").toLowerCase().replace(/[^a-z0-9\s]/g,"").trim().replace(/\s+/g,"_"); }
 async function readHype(){ var s = await PLAT.rt.ref(HYPE_PATH).once("value"); return s.val() || {}; }
+/* Who belongs in /roster (the Hype Board list, which the intranet login also reads):
+   anyone active with an NMLS number OR marked as a loan officer, so new hires can
+   sign in before their NMLS is entered. */
+function inHypeScope(emp){ return !!(String(emp.nmls||"").trim() || emp.isLoanOfficer); }
+/* Self-heal: add any active in-scope employee missing from /roster. Never removes anyone. */
+async function syncHypeRoster(list){
+  if(!PLAT.rt || !list || list.length < 20) return 0;
+  var roster = await readHype(), have = {}, updates = {}, n = 0;
+  Object.keys(roster).forEach(function(k){ if(roster[k]) have[normName(roster[k].name)] = 1; });
+  list.forEach(function(e){
+    if(!e || !e.fullName || e.status !== "active" || !inHypeScope(e) || have[normName(e.fullName)]) return;
+    var key = hypeKey(e.fullName);
+    if(roster[key]) return;
+    updates[key] = { name: e.fullName, photo: e.photoUrl || null }; n++;
+  });
+  if(n) await PLAT.rt.ref(HYPE_PATH).update(updates);
+  return n;
+}
 async function mirrorToHypeBoard(emp){
   if(!PLAT.rt || !emp || !emp.fullName) return;
   var roster = await readHype(), target = normName(emp.fullName), existing = null;
   Object.keys(roster).forEach(function(k){ if(roster[k] && normName(roster[k].name) === target) existing = k; });
-  if(emp.status === "active" && String(emp.nmls||"").trim()){
+  if(emp.status === "active" && inHypeScope(emp)){
     var patch = { name: emp.fullName };
     if(emp.photoUrl) patch.photo = emp.photoUrl; else if(!existing) patch.photo = null;
     await PLAT.rt.ref(HYPE_PATH + "/" + (existing || hypeKey(emp.fullName))).update(patch);
@@ -639,11 +657,17 @@ function App(){
         PLAT.db = db;
         setCanWrite(ssGet("pm_admin")==="1");
       }
-      var got = false;
+      var got = false, syncT = null;
       unsub = db.collection(EMP).onSnapshot(function(snap){
         got = true;
         var list = snap.docs.map(function(d){ return d.data(); }).filter(function(e){ return e && e.employeeId; });
         setEmps(list);
+        if(PLAT.mode === "firebase"){
+          clearTimeout(syncT);
+          syncT = setTimeout(function(){
+            syncHypeRoster(list).then(function(n){ if(n) flash("Added " + n + " " + (n===1?"person":"people") + " to the login roster"); }).catch(function(e){ console.warn("Roster sync:", e); });
+          }, 2500);
+        }
         setStatus("ready");
         if(PLAT.mode === "firebase" && !merged.current && list.length){
           merged.current = true;
@@ -1278,4 +1302,3 @@ ReactDOM.createRoot(document.getElementById("root")).render(h(Boundary,null,h(Ap
 </script>
 </body>
 </html>
-
