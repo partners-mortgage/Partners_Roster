@@ -572,6 +572,9 @@ function scaleImageToDataURL(file, maxDim, quality){
 
 /* ---------------- helpers ---------------- */
 function sameTxt(a,b){ return String(a||"").trim().toLowerCase() === String(b||"").trim().toLowerCase(); }
+/* Role type: LO / Operations / Admin. Older records without one fall back to the loan-officer flag. */
+var ROLE_TYPES = ["LO","Operations","Admin"];
+function roleTypeOf(e){ return (e && e.roleType) || (e && e.isLoanOfficer ? "LO" : "Admin"); }
 function initials(n){ if(!n) return "?"; var p = n.trim().split(/\s+/); return ((p[0]||"")[0]||"") + ((p[1]||"")[0]||""); }
 function fmtMoney(v){ return v ? "$" + Number(v).toLocaleString() : "$0"; }
 function fmtMoneyShort(v){ v = Number(v)||0; if(v>=1e6) return "$"+(v/1e6).toFixed(1)+"M"; if(v>=1e3) return "$"+Math.round(v/1e3)+"K"; return "$"+v; }
@@ -897,6 +900,7 @@ function GridView(p){
       if(f.processor && !sameTxt(e.processor, f.processor)) return false;
       if(f.role && e.role!==f.role) return false;
       if(f.emptype && e.employmentType!==f.emptype) return false;
+      if(f.rtype && roleTypeOf(e)!==f.rtype) return false;
       if(f.state && (e.stateLicenses||[]).indexOf(f.state)<0) return false;
       if(f.noPhoto && e.photoUrl) return false;
       if(f.noNmls && (e.nmls || !e.isLoanOfficer)) return false;
@@ -931,6 +935,7 @@ function GridView(p){
       h("select",{className:"fsel",value:f.status||"active",onChange:function(e){setF({status:e.target.value});}},h("option",{value:"active"},"Active"),h("option",{value:"inactive"},"Inactive"),h("option",{value:"all"},"All statuses")),
       sel("branch","All branches",opts.branches), sel("team","All teams",opts.teams), sel("processor","All processors",opts.processors), sel("role","All roles",opts.roles),
       h("select",{className:"fsel",value:f.emptype||"",onChange:function(e){setF({emptype:e.target.value});}},h("option",{value:""},"W2 / 1099"),h("option",{value:"W2"},"W2"),h("option",{value:"1099"},"1099")),
+      h("select",{className:"fsel",value:f.rtype||"",onChange:function(e){setF({rtype:e.target.value});}},h("option",{value:""},"All role types"),ROLE_TYPES.map(function(t){ return h("option",{key:t,value:t},t); })),
       sel("state","Any state license",opts.states),
       chip("noPhoto","No photo"), chip("noNmls","No NMLS"), chip("noState","No licenses"), chip("noComp","No comp plan"), chip("onbInc","Onboarding open"), chip("coach","Mortgage Coach",true),
       nFilters ? h("button",{className:"btn btn-ghost",style:{padding:"7px 12px"},onClick:function(){p.setFilters({});}},"Clear filters") : null),
@@ -1008,7 +1013,7 @@ function ProfileDrawer(p){
   else if(tab==="role") body = h("div",null,Row("Role",e.role),Row("Division",e.division),Row("Team",e.team),Row("Branch",e.branch),
     Row("Production partner",e.productionPartner),Row("Processor",e.processor),
     Row("Reports to",(function(){ var m = e.reportsTo && p.all.filter(function(x){return x.employeeId===e.reportsTo;})[0]; return m?m.fullName:""; })()),
-    Row("Employment type",e.employmentType),Row("Is loan officer",e.isLoanOfficer?"Yes":"No"));
+    Row("Employment type",e.employmentType),Row("Role type",roleTypeOf(e)));
   else if(tab==="licensing") body = h("div",null,Row("NMLS #",e.nmls),Row("DRE / RE license",e.dre),Tags("State licenses",e.stateLicenses,"b-teal"),Tags("Branch licenses",e.branchLicenses,"b-warm"));
   else if(tab==="comp") body = h("div",null,
     e.comp ? h(R.Fragment,null,Row("LO Comp — LP",e.comp.lp?e.comp.lp+" bps":""),Row("LO Comp — BP",e.comp.bp),Row("LO Comp — Rev",e.comp.rev),e.comp.originating?Row("Originating",e.comp.originating):null) : null,
@@ -1131,7 +1136,7 @@ function OrgChart(p){
 
 /* ---------------- Add / edit ---------------- */
 function EmployeeForm(p){
-  var _e = useState(strip(p.emp)), f = _e[0], setF = _e[1];
+  var _e = useState(function(){ var x = strip(p.emp); x.roleType = roleTypeOf(x); return x; }), f = _e[0], setF = _e[1];
   var _busy = useState(false), busy = _busy[0], setBusy = _busy[1];
   var fileRef = useRef();
   var isNew = !p.all.some(function(x){ return x.employeeId === p.emp.employeeId; });
@@ -1155,6 +1160,7 @@ function EmployeeForm(p){
     if(!n.fullName){ p.flash("Name is required","err"); return; }
     if(!n.preferredName) n.preferredName = n.firstName;
     n.slug = n.fullName.toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-|-$/g,"");
+    n.roleType = roleTypeOf(n); n.isLoanOfficer = n.roleType === "LO";
     if(typeof n.stateLicenses==="string") n.stateLicenses = n.stateLicenses.split(",").map(function(s){return s.trim().toUpperCase();}).filter(Boolean);
     if(typeof n.branchLicenses==="string") n.branchLicenses = n.branchLicenses.split(",").map(function(s){return s.trim();}).filter(Boolean);
     if(n.comp && (String(n.comp.lp||"")||String(n.comp.bp||"")||String(n.comp.rev||""))){
@@ -1194,7 +1200,7 @@ function EmployeeForm(p){
               .map(function(x){return {id:x.employeeId,label:x.fullName,sub:(x.role||"")+(x.team?" · "+x.team:"")};}),
             onChange:function(id){ set("reportsTo",id); }}))),
         h("div",{className:"form-grid"},Sel("Employment type","employmentType",["1099","W2",""]),Sel("Status","status",["active","inactive"])),
-        Tog("This person is a loan officer","isLoanOfficer"),
+        Sel("Role type","roleType",ROLE_TYPES),
         h("div",{className:"sec-title"},"Dates"),
         h("div",{className:"form-grid"},In("Hire date","hireDate","date"),In("Offboarding date","offboardingDate","date")),
         h("div",{className:"sec-title"},"Licensing"),
