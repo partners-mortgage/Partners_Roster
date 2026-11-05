@@ -759,9 +759,9 @@ function App(){
       h(Topbar,{q:q,setQ:function(v){ setQ(v); if(v && view!=="employees") go("employees"); },canWrite:canWrite,onMenu:function(){setSbOpen(true);},onGear:function(){ go("admin"); }}),
       emps.length === 0 ? h("div",{className:"page"},h("div",{className:"empty"},h("h3",null,"No records yet"),"The roster database is empty.",
         canWrite ? h("div",{style:{marginTop:14}},h("button",{className:"btn btn-primary",onClick:function(){ setEdit(blankEmp(nextId(emps))); }},h(Icon,{n:"plus",s:16}),"Add the first employee")) : null)) : null,
-      emps.length && view==="dashboard" ? h(Dashboard,{emps:emps,open:function(e){setSelId(e.employeeId);},goGrid:function(f){ setGridFilters(f||{}); go("employees"); }}) : null,
+      emps.length && view==="dashboard" ? h(Dashboard,{emps:emps,open:function(e){setSelId(e.employeeId);},goGrid:function(f){ setGridFilters(f||{}); setQ(""); go("employees"); }}) : null,
       emps.length && view==="employees" ? h(GridView,{emps:emps,q:q,filters:gridFilters,setFilters:setGridFilters,open:function(e){setSelId(e.employeeId);},
-        onNew:function(){ guard(function(){ setEdit(blankEmp(nextId(emps))); }); },canWrite:showEdit}) : null,
+        onNew:function(){ guard(function(){ setEdit(blankEmp(nextId(emps))); }); },canWrite:showEdit,clearQ:function(){ setQ(""); }}) : null,
       emps.length && view==="celebrations" ? h(Celebrations,{emps:emps,open:function(e){setSelId(e.employeeId);}}) : null,
       emps.length && view==="org" ? h(OrgChart,{emps:emps,open:function(e){setSelId(e.employeeId);},onReassign:function(id,m){ guard(function(){ reassign(id,m); }); },canEdit:showEdit,flash:flash}) : null,
       view==="admin" ? h(Settings,{emps:emps,canWrite:showEdit,flash:flash,
@@ -830,7 +830,8 @@ function Topbar(p){
   return h("div",{className:"topbar"},
     h("button",{className:"icon-btn mobile-only",onClick:p.onMenu,"aria-label":"Menu"},h(Icon,{n:"menu",s:20})),
     h("div",{className:"search-wrap"},h("span",{className:"si"},h(Icon,{n:"search",s:17})),
-      h("input",{className:"search-in",placeholder:"Search name, email, NMLS, branch, team, role…",value:p.q,onChange:function(e){p.setQ(e.target.value);}})),
+      h("input",{className:"search-in",type:"search",name:"roster-search",autoComplete:"off",autoCorrect:"off",autoCapitalize:"off",spellCheck:false,"data-lpignore":"true","data-1p-ignore":"true","data-form-type":"other",
+        placeholder:"Search name, email, NMLS, branch, team, role…",value:p.q,onChange:function(e){p.setQ(e.target.value);}})),
     h("div",{className:"topbar-sp"}),
     p.canWrite ? h("span",{className:"badge b-gold",style:{alignSelf:"center"}},"Editor") : h("span",{className:"badge b-gray",style:{alignSelf:"center"}},"View only"),
     h("button",{className:"icon-btn",title:"Settings",onClick:p.onGear},h(Icon,{n:"gear",s:19})));
@@ -922,10 +923,12 @@ function GridView(p){
   function th(key,label){ var on=sort.key===key; return h("th",{onClick:function(){ setSort({key:key,dir:on?-sort.dir:1}); }},label,h("span",{className:"ar"},on?(sort.dir>0?"▲":"▼"):"↕")); }
   function sel(key,all,list){ return h("select",{className:"fsel",value:f[key]||"",onChange:function(e){ var o={}; o[key]=e.target.value; setF(o); }},h("option",{value:""},all),list.map(function(b){return h("option",{key:b,value:b},b);})); }
   function chip(key,label,gold){ return h("span",{className:"chip"+(f[key]?" on"+(gold?" gold":""):""),onClick:function(){ var o={}; o[key]=!f[key]; setF(o); }},label); }
-  var nFilters = Object.keys(f).filter(function(k){return f[k];}).length;
+  var nFilters = Object.keys(f).filter(function(k){return f[k] && !(k==="status" && f[k]==="active");}).length + (p.q ? 1 : 0);
+  function clearAll(){ p.setFilters({}); if(p.clearQ) p.clearQ(); }
   return h("div",{className:"page"},
     h("div",{className:"page-head"},
-      h("div",null,h("div",{className:"eyebrow"},"Directory"),h("h1",null,"Employees"),h("div",{className:"sub"},rows.length+" of "+p.emps.length+" records shown")),
+      h("div",null,h("div",{className:"eyebrow"},"Directory"),h("h1",null,"Employees"),h("div",{className:"sub"},rows.length+" of "+p.emps.length+" records shown",
+        p.q ? h("span",null," · searching “"+p.q+"” ",h("a",{href:"#",onClick:function(ev){ ev.preventDefault(); p.clearQ(); }},"clear search")) : null)),
       h("div",{style:{display:"flex",gap:10,flexWrap:"wrap"}},
         h("button",{className:"btn btn-ghost",onClick:function(){exportRosterCSV(rows);}},h(Icon,{n:"dl",s:16}),"Export CSV"),
         h("button",{className:"btn btn-ghost",onClick:function(){exportRosterXLSX(p.emps);}},h(Icon,{n:"dl",s:16}),"Export Excel"),
@@ -938,7 +941,7 @@ function GridView(p){
       h("select",{className:"fsel",value:f.rtype||"",onChange:function(e){setF({rtype:e.target.value});}},h("option",{value:""},"All role types"),ROLE_TYPES.map(function(t){ return h("option",{key:t,value:t},t); })),
       sel("state","Any state license",opts.states),
       chip("noPhoto","No photo"), chip("noNmls","No NMLS"), chip("noState","No licenses"), chip("noComp","No comp plan"), chip("onbInc","Onboarding open"), chip("coach","Mortgage Coach",true),
-      nFilters ? h("button",{className:"btn btn-ghost",style:{padding:"7px 12px"},onClick:function(){p.setFilters({});}},"Clear filters") : null),
+      nFilters ? h("button",{className:"btn btn-ghost",style:{padding:"7px 12px"},onClick:clearAll},"Clear filters") : null),
     h("div",{className:"grid-wrap"},
       h("div",{className:"grid-scroll"},h("table",{className:"roster"},
         h("thead",null,h("tr",null,th("fullName","Employee"),th("role","Role"),th("team","Team"),th("processor","Processor"),th("branch","Branch"),th("nmls","NMLS"),th("employmentType","Type"),th("volume2026","2026 Volume"),th("status","Status"))),
@@ -954,7 +957,9 @@ function GridView(p){
             h("td",null,e.production.volume2026?fmtMoneyShort(e.production.volume2026):"—"),
             h("td",null,h("span",{className:"dot",style:{background:e.status==="active"?"var(--green)":"var(--muted)"}}),e.status==="active"?"Active":"Inactive"));
         })))),
-      rows.length===0 ? h("div",{className:"empty"},h("h3",null,"No matches"),"Try clearing filters or a different search.") : null,
+      rows.length===0 ? h("div",{className:"empty"},h("h3",null,"No matches"),
+        p.q ? "Nothing matches the search “"+p.q+"” with these filters." : "Nothing matches these filters.",
+        h("div",{style:{marginTop:14}},h("button",{className:"btn btn-primary",onClick:clearAll},"Show all active employees"))) : null,
       h("div",{className:"grid-foot"},h("span",null,rows.length+" employees"),h("span",null,"Click any row to open the full profile"))));
 }
 
