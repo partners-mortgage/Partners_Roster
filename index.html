@@ -136,7 +136,7 @@ img{max-width:100%}
 .chip.on.gold{background:var(--gold);border-color:var(--gold);color:#3a2a05}
 .grid-wrap{background:var(--card);border:1px solid var(--border);border-radius:var(--r);overflow:hidden;box-shadow:var(--shadow-sm)}
 .grid-scroll{overflow-x:auto}
-table.roster{width:100%;border-collapse:collapse;min-width:900px}
+table.roster{width:100%;border-collapse:collapse;min-width:1000px}
 .roster thead th{background:var(--surface);text-align:left;padding:11px 14px;font-family:var(--ff-disp);text-transform:uppercase;letter-spacing:.8px;font-size:11.5px;color:var(--mid);font-weight:700;border-bottom:1px solid var(--border);white-space:nowrap;cursor:pointer;user-select:none}
 .roster thead th:hover{color:var(--teal)}
 .roster thead th .ar{opacity:.4;margin-left:3px}
@@ -541,7 +541,7 @@ function exportRosterCSV(rows){
 }
 function exportRosterXLSX(list){
   if(typeof XLSX === "undefined"){ _flash("Excel library didn’t load — use Export CSV", "err"); return; }
-  var headers = ["EMPLOYEE","POSITION","Division","TEAM","P/P","PROCESSOR","HIRED","EMAIL","NMLS#","DRE#","W2/1099","Graduated","Equipment","STATE"];
+  var headers = ["EMPLOYEE","POSITION","Division","TEAM","LOA","PROCESSOR","HIRED","EMAIL","NMLS#","DRE#","W2/1099","Graduated","Equipment","STATE"];
   var aoa = [headers];
   (list||[]).slice().sort(function(a,b){ return (a.lastName+a.firstName).localeCompare(b.lastName+b.firstName); }).forEach(function(e){
     aoa.push([e.fullName||"",e.role||"",e.division||"",e.team||"",e.productionPartner||"",e.processor||"",e.hireDate||"",e.email||"",e.nmls||"",e.dre||"",e.employmentType||"",(e.onboarding&&e.onboarding.complete)?"\u2713":"",e.equipmentStatus||"",(e.stateLicenses||[]).join(", ")]);
@@ -889,7 +889,7 @@ function GridView(p){
   var opts = useMemo(function(){
     function uniq(fn){ var s={}; p.emps.forEach(function(e){ var v=fn(e); if(v) s[v]=1; }); return Object.keys(s).sort(); }
     var st={}; p.emps.forEach(function(e){ (e.stateLicenses||[]).forEach(function(x){ if(x) st[x]=1; }); });
-    return { branches:uniq(function(e){return e.branch;}), teams:uniq(function(e){return String(e.team||"").trim();}), roles:uniq(function(e){return e.role;}), processors:uniq(function(e){return String(e.processor||"").trim();}), states:Object.keys(st).sort() };
+    return { branches:uniq(function(e){return e.branch;}), teams:uniq(function(e){return String(e.team||"").trim();}), roles:uniq(function(e){return e.role;}), processors:uniq(function(e){return String(e.processor||"").trim();}), loas:uniq(function(e){return String(e.productionPartner||"").trim();}), states:Object.keys(st).sort() };
   },[p.emps]);
   var rows = useMemo(function(){
     var q = (p.q||"").toLowerCase().trim(), status = f.status||"active";
@@ -899,6 +899,7 @@ function GridView(p){
       if(f.branch && e.branch!==f.branch) return false;
       if(f.team && !sameTxt(e.team, f.team)) return false;
       if(f.processor && !sameTxt(e.processor, f.processor)) return false;
+      if(f.productionPartner && !sameTxt(e.productionPartner, f.productionPartner)) return false;
       if(f.role && e.role!==f.role) return false;
       if(f.emptype && e.employmentType!==f.emptype) return false;
       if(f.rtype && roleTypeOf(e)!==f.rtype) return false;
@@ -936,7 +937,7 @@ function GridView(p){
     h(LoadPanel,{emps:p.emps,f:f,setF:setF}),
     h("div",{className:"filterbar"},
       h("select",{className:"fsel",value:f.status||"active",onChange:function(e){setF({status:e.target.value});}},h("option",{value:"active"},"Active"),h("option",{value:"inactive"},"Inactive"),h("option",{value:"all"},"All statuses")),
-      sel("branch","All branches",opts.branches), sel("team","All teams",opts.teams), sel("processor","All processors",opts.processors), sel("role","All roles",opts.roles),
+      sel("branch","All branches",opts.branches), sel("team","All teams",opts.teams), sel("productionPartner","All LOAs",opts.loas), sel("processor","All processors",opts.processors), sel("role","All roles",opts.roles),
       h("select",{className:"fsel",value:f.emptype||"",onChange:function(e){setF({emptype:e.target.value});}},h("option",{value:""},"W2 / 1099"),h("option",{value:"W2"},"W2"),h("option",{value:"1099"},"1099")),
       h("select",{className:"fsel",value:f.rtype||"",onChange:function(e){setF({rtype:e.target.value});}},h("option",{value:""},"All role types"),ROLE_TYPES.map(function(t){ return h("option",{key:t,value:t},t); })),
       sel("state","Any state license",opts.states),
@@ -944,12 +945,13 @@ function GridView(p){
       nFilters ? h("button",{className:"btn btn-ghost",style:{padding:"7px 12px"},onClick:clearAll},"Clear filters") : null),
     h("div",{className:"grid-wrap"},
       h("div",{className:"grid-scroll"},h("table",{className:"roster"},
-        h("thead",null,h("tr",null,th("fullName","Employee"),th("role","Role"),th("team","Team"),th("processor","Processor"),th("branch","Branch"),th("nmls","NMLS"),th("employmentType","Type"),th("volume2026","2026 Volume"),th("status","Status"))),
+        h("thead",null,h("tr",null,th("fullName","Employee"),th("role","Role"),th("team","Team"),th("productionPartner","LOA"),th("processor","Processor"),th("branch","Branch"),th("nmls","NMLS"),th("employmentType","Type"),th("volume2026","2026 Volume"),th("status","Status"))),
         h("tbody",null,rows.map(function(e){
           return h("tr",{key:e.employeeId,onClick:function(){p.open(e);}},
             h("td",null,h("div",{className:"cell-nm"},h(Avatar,{emp:e,sz:32}),h("div",null,h("div",{className:"nm"},e.fullName),h("div",{className:"em"},e.email||e.employeeId)))),
             h("td",null,e.role),
             h("td",null,e.team?h("span",{className:"badge b-teal cell-link",title:"Show only "+e.team,onClick:function(ev){ ev.stopPropagation(); setF({team:e.team}); }},e.team):"—"),
+            h("td",null,e.productionPartner?h("span",{className:"cell-link",title:"Show only "+e.productionPartner,onClick:function(ev){ ev.stopPropagation(); setF({productionPartner:e.productionPartner}); }},e.productionPartner):"—"),
             h("td",null,e.processor?h("span",{className:"cell-link",title:"Show only "+e.processor,onClick:function(ev){ ev.stopPropagation(); setF({processor:e.processor}); }},e.processor):"—"),
             h("td",null,e.branch||"—"),
             h("td",null,e.nmls || (e.isLoanOfficer?h("span",{className:"badge b-red"},"missing"):"—")),
@@ -973,8 +975,10 @@ function LoadPanel(p){
     p.emps.forEach(function(e){
       if(status !== "all" && e.status !== status) return;
       var k = String(e[mode] || "").trim(); if(!k) return;
-      var o = g[k] = g[k] || { name:k, people:0, units:0, vol:0 };
+      var o = g[k] = g[k] || { name:k, people:0, units:0, vol:0, loas:{}, procs:{} };
       o.people++;
+      var la = String(e.productionPartner||"").trim(), pr = String(e.processor||"").trim();
+      if(la) o.loas[la] = 1; if(pr) o.procs[pr] = 1;
       o.units += (e.production && e.production.units2026) || 0;
       o.vol += (e.production && e.production.volume2026) || 0;
     });
@@ -988,13 +992,17 @@ function LoadPanel(p){
       h("span",{className:"t"},"Workload by"),
       h("div",{className:"seg"},
         h("button",{className:mode==="processor"?"on":"",onClick:function(){ setMode("processor"); }},"Processor"),
+        h("button",{className:mode==="productionPartner"?"on":"",onClick:function(){ setMode("productionPartner"); }},"LOA"),
         h("button",{className:mode==="team"?"on":"",onClick:function(){ setMode("team"); }},"Team")),
-      h("span",{className:"hint"}, cur ? "Showing only " + cur + " \u00b7 click again to clear" : "Click a tile to see just that " + mode)),
+      h("span",{className:"hint"}, cur ? "Showing only " + cur + " \u00b7 click again to clear" : "Click a tile to see just that " + (mode==="productionPartner" ? "LOA" : mode))),
     h("div",{className:"load-grid"}, groups.map(function(g){
       return h("button",{key:g.name,className:"load-tile"+(cur===g.name?" on":""),onClick:function(){ pick(g.name); }},
         h("div",{className:"n",title:g.name},g.name),
         h("div",{className:"c"},g.people,h("span",{style:{fontSize:12,fontWeight:600,color:"var(--muted)",marginLeft:5}},g.people===1?"person":"people")),
         h("div",{className:"s"},g.units+" units \u00b7 "+fmtMoneyShort(g.vol)+" in 2026"),
+        mode==="team" ? h("div",{className:"s",style:{marginTop:5,lineHeight:1.35}},
+          h("div",null,h("strong",null,"LOA: "),Object.keys(g.loas).join(", ")||"—"),
+          h("div",null,h("strong",null,"Processor: "),Object.keys(g.procs).join(", ")||"—")) : null,
         h("div",{className:"load-bar"},h("i",{style:{width:Math.round(g.people/max*100)+"%"}})));
     })));
 }
@@ -1016,7 +1024,7 @@ function ProfileDrawer(p){
   else if(tab==="contact") body = h("div",null,Row("Email",e.email?h("a",{href:"mailto:"+e.email},e.email):""),Row("Phone",e.phone),Row("Preferred name",e.preferredName),
     e.legalName?Row("Legal name",e.legalName):null,Row("Shipping address",pers.shippingAddress));
   else if(tab==="role") body = h("div",null,Row("Role",e.role),Row("Division",e.division),Row("Team",e.team),Row("Branch",e.branch),
-    Row("Production partner",e.productionPartner),Row("Processor",e.processor),
+    Row("LOA",e.productionPartner),Row("Processor",e.processor),
     Row("Reports to",(function(){ var m = e.reportsTo && p.all.filter(function(x){return x.employeeId===e.reportsTo;})[0]; return m?m.fullName:""; })()),
     Row("Employment type",e.employmentType),Row("Role type",roleTypeOf(e)));
   else if(tab==="licensing") body = h("div",null,Row("NMLS #",e.nmls),Row("DRE / RE license",e.dre),Tags("State licenses",e.stateLicenses,"b-teal"),Tags("Branch licenses",e.branchLicenses,"b-warm"));
@@ -1198,7 +1206,7 @@ function EmployeeForm(p){
         h("div",{className:"sec-title"},"Role, team & branch"),
         h("div",{className:"form-grid"},In("Role / position","role"),Sel("Division","division",["","Legacy","West","East","Boyd","N/A"])),
         h("div",{className:"form-grid"},In("Team","team"),In("Branch","branch")),
-        h("div",{className:"form-grid"},In("Production partner","productionPartner"),In("Processor","processor")),
+        h("div",{className:"form-grid"},In("LOA","productionPartner"),In("Processor","processor")),
         h("div",{className:"form-grid one"},h("div",null,h("label",{className:"f-label"},"Reports to (reporting chain)"),
           h(SearchSelect,{value:f.reportsTo||"",placeholder:"Search a person by name, role, or team…",
             options:p.all.filter(function(x){return x.employeeId!==f.employeeId;}).sort(function(a,b){return (a.fullName||"").localeCompare(b.fullName||"");})
