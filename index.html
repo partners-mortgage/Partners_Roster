@@ -444,6 +444,15 @@ async function applyRosterPatches(list){
       ["Tony Close", {productionPartner:"Tiffany", processor:"Tiffany"}]
     ].concat(underKendra(find, ["Jonathan Karabinus","Matt Fielding"]));
   }));
+  add(await runRosterPatch("patch_2026_11_loa_1", list, function(find){
+    return [
+      ["Erik Papke", {productionPartner:"Matt Fielding"}],
+      ["Nancy Kinzer", {productionPartner:"Matt Fielding"}],
+      ["Elvin Estela", {productionPartner:"Matt Fielding"}],
+      ["Jason Malmstrom", {productionPartner:"Matt Fielding"}],
+      ["Frank Helmand", {productionPartner:"Matt Miles"}]
+    ];
+  }));
   add(await createIfMissing("patch_2026_11_close_hires", list, [
     {firstName:"Wendee", lastName:"Close"},
     {firstName:"Tony", lastName:"Close"}
