@@ -453,6 +453,32 @@ async function applyRosterPatches(list){
       ["Frank Helmand", {productionPartner:"Matt Miles"}]
     ];
   }));
+  add(await runRosterPatch("patch_2026_11_volume2026", list, function(find){
+    // [name, 2026 units, 2026 volume]
+    var vol = [
+      ["Bobby Afrasiabi",1,500000],["Stacey Batiste",17,2300000],["Matt Von Bergen",35,14000000],["Andre Bishop",3,1500000],
+      ["Dereck Bowlen",23,12000000],["Venane Brune",9,5000000],["Joe Bundrick",0,0],["Chad Caplinger",6,2000000],
+      ["Tony Close",18,10000000],["Wendee Close",18,10000000],["Aaron Colvin",4,2300000],["Russell Cunha",4,700000],
+      ["Shazia Dar",22,15500000],["Robert (Bob) DeWeese",6,3000000],["Jenny Nguyen Dinh",2,500000],["Angela Duncan",0,0],
+      ["Elvin Estela",13,7000000],["Laura Ford",4,2000000],["Peter Frankel",0,0],["Rob Garcia",30,16000000],
+      ["Jeffrey Glass",6,4000000],["Ilda Gomez",1,1000000],["Harry Gu",1,600000],["Jim Hagen",5,2000000],
+      ["Frank Helmand",0,0],["Michelle Herzl",1,200000],["Marilo Jackson",0,0],["Nancy Kinzer",1,500000],
+      ["John LeCave",0,0],["Matthew Lewis",36,21000000],["Yogesh Lulla",3,1200000],["Jason Malmstrom",33,8500000],
+      ["Robert Martiniello",0,0],["Tim Mellema",7,3200000],["Rusty Mendoza",34,17000000],["Nina Merrill",3,1500000],
+      ["Dave Miller",10,3700000],["Joel Morgan",13,7000000],["Daniel O'Brien",0,0],["Lori Ann Oja",1,500000],
+      ["Chris Palachuk",2,700000],["Erik Papke",8,5000000],["Matt Perez",4,2500000],["Jay Posey",8,2300000],
+      ["Leif Potter",35,18000000],["Allen Quinney",3,1200000],["Andre Reikko",0,0],["Ryan Ross",0,0],
+      ["Sierra Schutte",2,1000000],["Derek Sepulveda",8,4000000],["Lanny Setka",16,10000000],["Josh Sommerfield",60,30000000],
+      ["Katie Pastor Trinidad",121,61000000],["Xavier Walker",2,300000],["Craig Warn",9,3500000],["Barry Willner",10,5000000],
+      ["Helen Woizeschke",2,500000]
+    ].map(function(r){ return [r[0], {"production/units2026":r[1], "production/volume2026":r[2]}]; });
+    var gone = ["Maksim Kapustsin","Tony Keidel","Angelo Magee","Carter Mason","John Mason","Dennis Singh","Will Smith",
+      "Paul Spagnoli","Rafi Westhoff","Mike Zamani","Yogesh Lulla","Xavier Walker"].map(function(n){ return [n, {status:"inactive"}]; });
+    return vol.concat(gone);
+  }));
+  add(await runRosterPatch("patch_2026_11_volume2026_b", list, function(find){
+    return [["Sean McDonough", {"production/units2026":12, "production/volume2026":7000000}]];
+  }));
   add(await createIfMissing("patch_2026_11_close_hires", list, [
     {firstName:"Wendee", lastName:"Close"},
     {firstName:"Tony", lastName:"Close"}
