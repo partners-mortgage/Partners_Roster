@@ -693,7 +693,7 @@ function App(){
         PLAT.mode = "firebase";
         try { db = await initFirebaseDb(); } catch(e){ console.error(e); setStatus("error"); return; }
         PLAT.db = db;
-        setCanWrite(ssGet("pm_admin")==="1");
+        setCanWrite(true);   // anyone past the PIN gate can edit; deletes still need the name typed to confirm
       }
       var got = false, syncT = null;
       unsub = db.collection(EMP).onSnapshot(function(snap){
@@ -796,7 +796,11 @@ function App(){
         canWrite ? h("div",{style:{marginTop:14}},h("button",{className:"btn btn-primary",onClick:function(){ setEdit(blankEmp(nextId(emps))); }},h(Icon,{n:"plus",s:16}),"Add the first employee")) : null)) : null,
       emps.length && view==="dashboard" ? h(Dashboard,{emps:emps,open:function(e){setSelId(e.employeeId);},goGrid:function(f){ setGridFilters(f||{}); setQ(""); go("employees"); }}) : null,
       emps.length && view==="employees" ? h(GridView,{emps:emps,q:q,filters:gridFilters,setFilters:setGridFilters,open:function(e){setSelId(e.employeeId);},
-        onNew:function(){ guard(function(){ setEdit(blankEmp(nextId(emps))); }); },canWrite:showEdit,clearQ:function(){ setQ(""); }}) : null,
+        onNew:function(){ guard(function(){ setEdit(blankEmp(nextId(emps))); }); },canWrite:showEdit,clearQ:function(){ setQ(""); },
+        onQuickVolume:function(emp,u,v){ guard(function(){
+          var n = strip(emp); n.production = Object.assign({units2025:0,volume2025:0,units2026:0,volume2026:0}, n.production, {units2026:u, volume2026:v});
+          dbSave(n).then(function(){ flash(emp.fullName + ": " + u + " / " + fmtMoneyShort(v) + " for 2026"); }).catch(writeErr);
+        }); }}) : null,
       emps.length && view==="celebrations" ? h(Celebrations,{emps:emps,open:function(e){setSelId(e.employeeId);}}) : null,
       emps.length && view==="org" ? h(OrgChart,{emps:emps,open:function(e){setSelId(e.employeeId);},onReassign:function(id,m){ guard(function(){ reassign(id,m); }); },canEdit:showEdit,flash:flash}) : null,
       view==="admin" ? h(Settings,{emps:emps,canWrite:showEdit,flash:flash,
@@ -917,7 +921,29 @@ function MiniCard(p){
 }
 
 /* ---------------- Grid ---------------- */
+/* Inline 2026 volume editing: "units / volume", e.g. "20 / 17.4M", "3 / 850K", "0". */
+function fmtUV(e){ var pr = e.production||{}, u = pr.units2026||0, v = pr.volume2026||0; if(!u && !v) return ""; return u + " / " + (v>=1e6 ? +(v/1e6).toFixed(2)+"M" : v>=1e3 ? +(v/1e3).toFixed(1)+"K" : v); }
+function parseUV(s){
+  s = String(s||"").trim().replace(/\$/g,"").replace(/,/g,"");
+  if(s === "" || s === "0") return {u:0, v:0};
+  var m = /^(\d+)\s*(?:\/|loans?\s*(?:for)?)?\s*(\d*\.?\d+)?\s*([mk])?\s*$/i.exec(s);
+  if(!m || parseInt(m[1],10) > 2000) return null;
+  var v = m[2] ? parseFloat(m[2]) : 0, suf = (m[3]||"").toLowerCase();
+  v = suf === "m" ? v*1e6 : suf === "k" ? v*1e3 : v;
+  return { u: parseInt(m[1],10), v: Math.round(v) };
+}
 function GridView(p){
+  var _ve = useState(null), volEdit = _ve[0], setVolEdit = _ve[1];
+  var _vv = useState(""), volVal = _vv[0], setVolVal = _vv[1];
+  var volDone = useRef(false);
+  function startVol(e, ev){ if(!p.canWrite || !p.onQuickVolume) return; ev.stopPropagation(); volDone.current = false; setVolEdit(e.employeeId); setVolVal(fmtUV(e)); }
+  function commitVol(e){
+    if(volDone.current) return; volDone.current = true;
+    var r = parseUV(volVal); setVolEdit(null);
+    if(volVal.trim() === fmtUV(e)) return;
+    if(!r){ _flash("Use loans / volume, like 20 / 17.4M", "err"); return; }
+    p.onQuickVolume(e, r.u, r.v);
+  }
   var _sort = useState({key:"fullName",dir:1}), sort = _sort[0], setSort = _sort[1];
   var f = p.filters||{};
   function setF(patch){ p.setFilters(Object.assign({},f,patch)); }
@@ -991,7 +1017,15 @@ function GridView(p){
             h("td",null,e.branch||"—"),
             h("td",null,e.nmls || (e.isLoanOfficer?h("span",{className:"badge b-red"},"missing"):"—")),
             h("td",null,e.employmentType?h("span",{className:"badge "+(e.employmentType==="W2"?"b-warm":"b-gray")},e.employmentType):"—"),
-            h("td",null,e.production.volume2026?fmtMoneyShort(e.production.volume2026):"—"),
+            h("td",{onClick:function(ev){ startVol(e, ev); },title:p.canWrite?"Click to edit 2026 loans / volume":""},
+              volEdit === e.employeeId
+                ? h("input",{className:"f-in",autoFocus:true,value:volVal,placeholder:"20 / 17.4M",style:{width:120,padding:"5px 8px"},
+                    onClick:function(ev){ ev.stopPropagation(); },
+                    onChange:function(ev){ setVolVal(ev.target.value); },
+                    onKeyDown:function(ev){ if(ev.key==="Enter"){ ev.preventDefault(); commitVol(e); } else if(ev.key==="Escape"){ volDone.current = true; setVolEdit(null); } },
+                    onBlur:function(){ commitVol(e); }})
+                : h("span",{className:p.canWrite?"cell-link":""},
+                    (e.production.units2026 || e.production.volume2026) ? (e.production.units2026||0) + " / " + fmtMoneyShort(e.production.volume2026) : (p.canWrite ? h("span",{style:{color:"var(--muted)"}},"—") : "—"))),
             h("td",null,h("span",{className:"dot",style:{background:e.status==="active"?"var(--green)":"var(--muted)"}}),e.status==="active"?"Active":"Inactive"));
         })))),
       rows.length===0 ? h("div",{className:"empty"},h("h3",null,"No matches"),
